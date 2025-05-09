@@ -1,0 +1,483 @@
+From 56b894f72947af75f2348d6ee01c96a1fc6083fc Mon Sep 17 00:00:00 2001
+From: twodoorcoupe <giorgio.fontanive@outlook.com>
+Date: Fri, 9 May 2025 10:33:32 +0200
+Subject: [PATCH] Add HBM
+
+---
+ src/qdma_subsystem/qdma_subsystem.sv          | 230 +++++++++++++++++-
+ .../qdma_subsystem_qdma_wrapper.v             | 138 +++++++++++
+ 2 files changed, 364 insertions(+), 4 deletions(-)
+
+diff --git a/src/qdma_subsystem/qdma_subsystem.sv b/src/qdma_subsystem/qdma_subsystem.sv
+index 2242547..a953e86 100644
+--- a/src/qdma_subsystem/qdma_subsystem.sv
++++ b/src/qdma_subsystem/qdma_subsystem.sv
+@@ -241,6 +241,20 @@ module qdma_subsystem #(
+   wire         h2c_byp_in_st_no_dma;
+   wire         h2c_byp_in_st_rdy;
+ 
++  wire         h2c_byp_in_mm_vld;
++  wire  [63:0] h2c_byp_in_mm_radr;
++  wire  [63:0] h2c_byp_in_mm_wadr;
++  wire  [15:0] h2c_byp_in_mm_len;
++  wire         h2c_byp_in_mm_mrkr_req;
++  wire   [2:0] h2c_byp_in_mm_port_id;
++  wire         h2c_byp_in_mm_sdi;
++  wire  [10:0] h2c_byp_in_mm_qid;
++  wire         h2c_byp_in_mm_error;
++  wire   [7:0] h2c_byp_in_mm_func;
++  wire  [15:0] h2c_byp_in_mm_cidx;
++  wire         h2c_byp_in_mm_no_dma;
++  wire         h2c_byp_in_mm_rdy;
++
+   wire         c2h_byp_out_vld;
+   wire [255:0] c2h_byp_out_dsc;
+   wire         c2h_byp_out_st_mm;
+@@ -263,6 +277,61 @@ module qdma_subsystem #(
+   wire   [6:0] c2h_byp_in_st_csh_pfch_tag;
+   wire         c2h_byp_in_st_csh_rdy;
+ 
++  wire         c2h_byp_in_mm_vld;
++  wire  [63:0] c2h_byp_in_mm_radr;
++  wire  [63:0] c2h_byp_in_mm_wadr;
++  wire  [15:0] c2h_byp_in_mm_len;
++  wire         c2h_byp_in_mm_mrkr_req;
++  wire   [2:0] c2h_byp_in_mm_port_id;
++  wire         c2h_byp_in_mm_sdi;
++  wire  [10:0] c2h_byp_in_mm_qid;
++  wire         c2h_byp_in_mm_error;
++  wire   [7:0] c2h_byp_in_mm_func;
++  wire  [15:0] c2h_byp_in_mm_cidx;
++  wire         c2h_byp_in_mm_no_dma;
++  wire         c2h_byp_in_mm_rdy;
++
++  wire  [63:0] m_axi_araddr;
++  wire   [1:0] m_axi_arburst;
++  wire   [3:0] m_axi_arcache;
++  wire   [3:0] m_axi_arid;
++  wire   [7:0] m_axi_arlen;
++  wire   [0:0] m_axi_arlock;
++  wire   [2:0] m_axi_arprot;
++  wire   [3:0] m_axi_arqos;
++  wire         m_axi_arready;
++  wire   [2:0] m_axi_arsize;
++  wire  [31:0] m_axi_aruser;
++  wire         m_axi_arvalid;
++  wire  [63:0] m_axi_awaddr;
++  wire   [1:0] m_axi_awburst;
++  wire   [3:0] m_axi_awcache;
++  wire   [3:0] m_axi_awid;
++  wire   [7:0] m_axi_awlen;
++  wire   [0:0] m_axi_awlock;
++  wire   [2:0] m_axi_awprot;
++  wire   [3:0] m_axi_awqos;
++  wire         m_axi_awready;
++  wire   [2:0] m_axi_awsize;
++  wire  [31:0] m_axi_awuser;
++  wire         m_axi_awvalid;
++  wire   [3:0] m_axi_bid;
++  wire         m_axi_bready;
++  wire   [1:0] m_axi_bresp;
++  wire         m_axi_bvalid;
++  wire [511:0] m_axi_rdata;
++  wire   [3:0] m_axi_rid;
++  wire         m_axi_rlast;
++  wire         m_axi_rready;
++  wire   [1:0] m_axi_rresp;
++  wire         m_axi_rvalid;
++  wire [511:0] m_axi_wdata;
++  wire         m_axi_wlast;
++  wire         m_axi_wready;
++  wire  [63:0] m_axi_wstrb;
++  wire  [63:0] m_axi_wuser;
++  wire         m_axi_wvalid;
++
+   wire         axil_aresetn;
+ 
+   // Reset is clocked by the 125MHz AXI-Lite clock
+@@ -288,6 +357,18 @@ module qdma_subsystem #(
+     .ODIV2 (pcie_refclk)
+   );
+ 
++  wire hbm_ref_clk;
++
++`ifdef __au55n__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`elsif __au55c__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`elsif __au50__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`elsif __au280__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`endif
++
+   assign h2c_byp_out_rdy            = 1'b1;
+   assign h2c_byp_in_st_vld          = 1'b0;
+   assign h2c_byp_in_st_addr         = 0;
+@@ -303,6 +384,19 @@ module qdma_subsystem #(
+   assign h2c_byp_in_st_cidx         = 0;
+   assign h2c_byp_in_st_no_dma       = 1'b0;
+ 
++  assign h2c_byp_in_mm_vld          = 1'b0;
++  assign h2c_byp_in_mm_radr         = 0;
++  assign h2c_byp_in_mm_wadr         = 0;
++  assign h2c_byp_in_mm_len          = 0;
++  assign h2c_byp_in_mm_mrkr_req     = 1'b0;
++  assign h2c_byp_in_mm_port_id      = 0;
++  assign h2c_byp_in_mm_sdi          = 1'b0;
++  assign h2c_byp_in_mm_qid          = 0;
++  assign h2c_byp_in_mm_error        = 1'b0;
++  assign h2c_byp_in_mm_func         = 0;
++  assign h2c_byp_in_mm_cidx         = 0;
++  assign h2c_byp_in_mm_no_dma       = 1'b0;
++
+   assign c2h_byp_out_rdy            = 1'b1;
+   assign c2h_byp_in_st_csh_vld      = 1'b0;
+   assign c2h_byp_in_st_csh_addr     = 0;
+@@ -312,6 +406,67 @@ module qdma_subsystem #(
+   assign c2h_byp_in_st_csh_func     = 0;
+   assign c2h_byp_in_st_csh_pfch_tag = 0;
+ 
++  assign c2h_byp_in_mm_vld          = 1'b0;
++  assign c2h_byp_in_mm_radr         = 0;
++  assign c2h_byp_in_mm_wadr         = 0;
++  assign c2h_byp_in_mm_len          = 0;
++  assign c2h_byp_in_mm_mrkr_req     = 1'b0;
++  assign c2h_byp_in_mm_port_id      = 0;
++  assign c2h_byp_in_mm_sdi          = 1'b0;
++  assign c2h_byp_in_mm_qid          = 0;
++  assign c2h_byp_in_mm_error        = 1'b0;
++  assign c2h_byp_in_mm_func         = 0;
++  assign c2h_byp_in_mm_cidx         = 0;
++  assign c2h_byp_in_mm_no_dma       = 1'b0;
++
++  qdma_hbm_bd_wrapper hbm_inst (
++    .S00_AXI_0_araddr                    (m_axi_araddr),
++    .S00_AXI_0_arburst                   (m_axi_arburst),
++    .S00_AXI_0_arcache                   (m_axi_arcache),
++    .S00_AXI_0_arid                      (m_axi_arid),
++    .S00_AXI_0_arlen                     (m_axi_arlen),
++    .S00_AXI_0_arlock                    (m_axi_arlock),
++    .S00_AXI_0_arprot                    (m_axi_arprot),
++    .S00_AXI_0_arqos                     (m_axi_arqos),
++    .S00_AXI_0_arready                   (m_axi_arready),
++    .S00_AXI_0_arsize                    (m_axi_arsize),
++    .S00_AXI_0_aruser                    (m_axi_aruser),
++    .S00_AXI_0_arvalid                   (m_axi_arvalid),
++    .S00_AXI_0_awaddr                    (m_axi_awaddr),
++    .S00_AXI_0_awburst                   (m_axi_awburst),
++    .S00_AXI_0_awcache                   (m_axi_awcache),
++    .S00_AXI_0_awid                      (m_axi_awid),
++    .S00_AXI_0_awlen                     (m_axi_awlen),
++    .S00_AXI_0_awlock                    (m_axi_awlock),
++    .S00_AXI_0_awprot                    (m_axi_awprot),
++    .S00_AXI_0_awqos                     (m_axi_awqos),
++    .S00_AXI_0_awready                   (m_axi_awready),
++    .S00_AXI_0_awsize                    (m_axi_awsize),
++    .S00_AXI_0_awuser                    (m_axi_awuser),
++    .S00_AXI_0_awvalid                   (m_axi_awvalid),
++    .S00_AXI_0_bid                       (m_axi_bid),
++    .S00_AXI_0_bready                    (m_axi_bready),
++    .S00_AXI_0_bresp                     (m_axi_bresp),
++    .S00_AXI_0_bvalid                    (m_axi_bvalid),
++    .S00_AXI_0_rdata                     (m_axi_rdata),
++    .S00_AXI_0_rid                       (m_axi_rid),
++    .S00_AXI_0_rlast                     (m_axi_rlast),
++    .S00_AXI_0_rready                    (m_axi_rready),
++    .S00_AXI_0_rresp                     (m_axi_rresp),
++    .S00_AXI_0_rvalid                    (m_axi_rvalid),
++    .S00_AXI_0_wdata                     (m_axi_wdata),
++    .S00_AXI_0_wlast                     (m_axi_wlast),
++    .S00_AXI_0_wready                    (m_axi_wready),
++    .S00_AXI_0_wstrb                     (m_axi_wstrb),
++    .S00_AXI_0_wuser                     (m_axi_wuser),
++    .S00_AXI_0_wvalid                    (m_axi_wvalid),
++
++    .aresetn                             (pcie_rstn),
++    .axi_clk                             (axis_aclk),
++    .axi_resetn                          (powerup_rstn),
++    .hbm_ref_clk                         (hbm_ref_clk)
++  );
++
+   qdma_subsystem_qdma_wrapper #(
+     .QDMA_ID (QDMA_ID)
+   ) qdma_wrapper_inst (
+@@ -404,6 +559,19 @@ module qdma_subsystem #(
+     .h2c_byp_in_st_no_dma            (h2c_byp_in_st_no_dma),
+     .h2c_byp_in_st_rdy               (h2c_byp_in_st_rdy),
+ 
++    .h2c_byp_in_mm_vld               (h2c_byp_in_mm_vld),
++    .h2c_byp_in_mm_radr              (h2c_byp_in_mm_radr),
++    .h2c_byp_in_mm_wadr              (h2c_byp_in_mm_wadr),
++    .h2c_byp_in_mm_len               (h2c_byp_in_mm_len),
++    .h2c_byp_in_mm_mrkr_req          (h2c_byp_in_mm_mrkr_req),
++    .h2c_byp_in_mm_port_id           (h2c_byp_in_mm_port_id),
++    .h2c_byp_in_mm_sdi               (h2c_byp_in_mm_sdi),
++    .h2c_byp_in_mm_qid               (h2c_byp_in_mm_qid),
++    .h2c_byp_in_mm_error             (h2c_byp_in_mm_error),
++    .h2c_byp_in_mm_func              (h2c_byp_in_mm_func),
++    .h2c_byp_in_mm_cidx              (h2c_byp_in_mm_cidx),
++    .h2c_byp_in_mm_no_dma            (h2c_byp_in_mm_no_dma),
++
+     .c2h_byp_out_vld                 (c2h_byp_out_vld),
+     .c2h_byp_out_dsc                 (c2h_byp_out_dsc),
+     .c2h_byp_out_st_mm               (c2h_byp_out_st_mm),
+@@ -426,6 +594,60 @@ module qdma_subsystem #(
+     .c2h_byp_in_st_csh_pfch_tag      (c2h_byp_in_st_csh_pfch_tag),
+     .c2h_byp_in_st_csh_rdy           (c2h_byp_in_st_csh_rdy),
+ 
++    .c2h_byp_in_mm_vld               (c2h_byp_in_mm_vld),
++    .c2h_byp_in_mm_radr              (c2h_byp_in_mm_radr),
++    .c2h_byp_in_mm_wadr              (c2h_byp_in_mm_wadr),
++    .c2h_byp_in_mm_len               (c2h_byp_in_mm_len),
++    .c2h_byp_in_mm_mrkr_req          (c2h_byp_in_mm_mrkr_req),
++    .c2h_byp_in_mm_port_id           (c2h_byp_in_mm_port_id),
++    .c2h_byp_in_mm_sdi               (c2h_byp_in_mm_sdi),
++    .c2h_byp_in_mm_qid               (c2h_byp_in_mm_qid),
++    .c2h_byp_in_mm_error             (c2h_byp_in_mm_error),
++    .c2h_byp_in_mm_func              (c2h_byp_in_mm_func),
++    .c2h_byp_in_mm_cidx              (c2h_byp_in_mm_cidx),
++    .c2h_byp_in_mm_no_dma            (c2h_byp_in_mm_no_dma),
++
++    .m_axi_araddr                    (m_axi_araddr),
++    .m_axi_arburst                   (m_axi_arburst),
++    .m_axi_arcache                   (m_axi_arcache),
++    .m_axi_arid                      (m_axi_arid),
++    .m_axi_arlen                     (m_axi_arlen),
++    .m_axi_arlock                    (m_axi_arlock),
++    .m_axi_arprot                    (m_axi_arprot),
++    // .m_axi_arqos                     (m_axi_arqos),
++    .m_axi_arready                   (m_axi_arready),
++    .m_axi_arsize                    (m_axi_arsize),
++    .m_axi_aruser                    (m_axi_aruser),
++    .m_axi_arvalid                   (m_axi_arvalid),
++    .m_axi_awaddr                    (m_axi_awaddr),
++    .m_axi_awburst                   (m_axi_awburst),
++    .m_axi_awcache                   (m_axi_awcache),
++    .m_axi_awid                      (m_axi_awid),
++    .m_axi_awlen                     (m_axi_awlen),
++    .m_axi_awlock                    (m_axi_awlock),
++    .m_axi_awprot                    (m_axi_awprot),
++    // .m_axi_awqos                     (m_axi_awqos),
++    .m_axi_awready                   (m_axi_awready),
++    .m_axi_awsize                    (m_axi_awsize),
++    .m_axi_awuser                    (m_axi_awuser),
++    .m_axi_awvalid                   (m_axi_awvalid),
++    .m_axi_bid                       (m_axi_bid),
++    .m_axi_bready                    (m_axi_bready),
++    .m_axi_bresp                     (m_axi_bresp),
++    .m_axi_bvalid                    (m_axi_bvalid),
++    .m_axi_rdata                     (m_axi_rdata),
++    .m_axi_rid                       (m_axi_rid),
++    .m_axi_rlast                     (m_axi_rlast),
++    .m_axi_rready                    (m_axi_rready),
++    .m_axi_rresp                     (m_axi_rresp),
++    .m_axi_rvalid                    (m_axi_rvalid),
++    .m_axi_wdata                     (m_axi_wdata),
++    .m_axi_wlast                     (m_axi_wlast),
++    .m_axi_wready                    (m_axi_wready),
++    .m_axi_wstrb                     (m_axi_wstrb),
++    .m_axi_wuser                     (m_axi_wuser),
++    .m_axi_wvalid                    (m_axi_wvalid),
++
+     .pcie_refclk                     (pcie_refclk),
+     .pcie_refclk_gt                  (pcie_refclk_gt),
+     .pcie_rstn                       (pcie_rstn),
+@@ -438,13 +660,13 @@ module qdma_subsystem #(
+     .axis_aclk                       (axis_aclk),
+ 
+ `ifdef __au55n__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `elsif __au55c__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `elsif __au50__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `elsif __au280__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `endif
+ 
+     .aresetn                         (powerup_rstn)
+diff --git a/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v b/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v
+index 9f426ba..429f995 100644
+--- a/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v
++++ b/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v
+@@ -111,6 +111,20 @@ module qdma_subsystem_qdma_wrapper #(
+   input          h2c_byp_in_st_no_dma,
+   output         h2c_byp_in_st_rdy,
+ 
++  input          h2c_byp_in_mm_vld,
++  input   [63:0] h2c_byp_in_mm_radr,
++  input   [63:0] h2c_byp_in_mm_wadr,
++  input   [15:0] h2c_byp_in_mm_len,
++  input          h2c_byp_in_mm_mrkr_req,
++  input    [2:0] h2c_byp_in_mm_port_id,
++  input          h2c_byp_in_mm_sdi,
++  input   [10:0] h2c_byp_in_mm_qid,
++  input          h2c_byp_in_mm_error,
++  input    [7:0] h2c_byp_in_mm_func,
++  input   [15:0] h2c_byp_in_mm_cidx,
++  input          h2c_byp_in_mm_no_dma,
++  output         h2c_byp_in_mm_rdy,
++
+   output         c2h_byp_out_vld,
+   output [255:0] c2h_byp_out_dsc,
+   output         c2h_byp_out_st_mm,
+@@ -133,6 +147,61 @@ module qdma_subsystem_qdma_wrapper #(
+   input    [6:0] c2h_byp_in_st_csh_pfch_tag,
+   output         c2h_byp_in_st_csh_rdy,
+ 
++  input          c2h_byp_in_mm_vld,
++  input   [63:0] c2h_byp_in_mm_radr,
++  input   [63:0] c2h_byp_in_mm_wadr,
++  input   [15:0] c2h_byp_in_mm_len,
++  input          c2h_byp_in_mm_mrkr_req,
++  input    [2:0] c2h_byp_in_mm_port_id,
++  input          c2h_byp_in_mm_sdi,
++  input   [10:0] c2h_byp_in_mm_qid,
++  input          c2h_byp_in_mm_error,
++  input    [7:0] c2h_byp_in_mm_func,
++  input   [15:0] c2h_byp_in_mm_cidx,
++  input          c2h_byp_in_mm_no_dma,
++  output         c2h_byp_in_mm_rdy,
++
++  output  [63:0] m_axi_araddr,
++  output   [1:0] m_axi_arburst,
++  output   [3:0] m_axi_arcache,
++  output   [3:0] m_axi_arid,
++  output   [7:0] m_axi_arlen,
++  output   [0:0] m_axi_arlock,
++  output   [2:0] m_axi_arprot,
++  // output   [3:0] m_axi_arqos,
++  input          m_axi_arready,
++  output   [2:0] m_axi_arsize,
++  output  [31:0] m_axi_aruser,
++  output         m_axi_arvalid,
++  output  [63:0] m_axi_awaddr,
++  output   [1:0] m_axi_awburst,
++  output   [3:0] m_axi_awcache,
++  output   [3:0] m_axi_awid,
++  output   [7:0] m_axi_awlen,
++  output   [0:0] m_axi_awlock,
++  output   [2:0] m_axi_awprot,
++  // output   [3:0] m_axi_awqos,
++  input          m_axi_awready,
++  output   [2:0] m_axi_awsize,
++  output  [31:0] m_axi_awuser,
++  output         m_axi_awvalid,
++  input    [3:0] m_axi_bid,
++  output         m_axi_bready,
++  input    [1:0] m_axi_bresp,
++  input          m_axi_bvalid,
++  input  [511:0] m_axi_rdata,
++  input    [3:0] m_axi_rid,
++  input          m_axi_rlast,
++  output         m_axi_rready,
++  input    [1:0] m_axi_rresp,
++  input          m_axi_rvalid,
++  output [511:0] m_axi_wdata,
++  output         m_axi_wlast,
++  input          m_axi_wready,
++  output  [63:0] m_axi_wstrb,
++  output  [63:0] m_axi_wuser,
++  output         m_axi_wvalid,
++
+   input          pcie_refclk,
+   input          pcie_refclk_gt,
+   input          pcie_rstn,
+@@ -336,6 +405,20 @@ module qdma_subsystem_qdma_wrapper #(
+       .h2c_byp_out_fmt                      (h2c_byp_out_fmt),
+       .h2c_byp_out_rdy                      (h2c_byp_out_rdy),
+ 
++      .h2c_byp_in_mm_vld                    (h2c_byp_in_mm_vld),
++      .h2c_byp_in_mm_radr                   (h2c_byp_in_mm_radr),
++      .h2c_byp_in_mm_wadr                   (h2c_byp_in_mm_wadr),
++      .h2c_byp_in_mm_len                    (h2c_byp_in_mm_len),
++      .h2c_byp_in_mm_mrkr_req               (h2c_byp_in_mm_mrkr_req),
++      .h2c_byp_in_mm_port_id                (h2c_byp_in_mm_port_id),
++      .h2c_byp_in_mm_sdi                    (h2c_byp_in_mm_sdi),
++      .h2c_byp_in_mm_qid                    (h2c_byp_in_mm_qid),
++      .h2c_byp_in_mm_error                  (h2c_byp_in_mm_error),
++      .h2c_byp_in_mm_func                   (h2c_byp_in_mm_func),
++      .h2c_byp_in_mm_cidx                   (h2c_byp_in_mm_cidx),
++      .h2c_byp_in_mm_no_dma                 (h2c_byp_in_mm_no_dma),
++      .h2c_byp_in_mm_rdy                    (h2c_byp_in_mm_rdy),
++
+       .h2c_byp_in_st_vld                    (h2c_byp_in_st_vld),
+       .h2c_byp_in_st_addr                   (h2c_byp_in_st_addr),
+       .h2c_byp_in_st_len                    (h2c_byp_in_st_len),
+@@ -351,6 +434,20 @@ module qdma_subsystem_qdma_wrapper #(
+       .h2c_byp_in_st_no_dma                 (h2c_byp_in_st_no_dma),
+       .h2c_byp_in_st_rdy                    (h2c_byp_in_st_rdy),
+ 
++      .c2h_byp_in_mm_vld                    (c2h_byp_in_mm_vld),
++      .c2h_byp_in_mm_radr                   (c2h_byp_in_mm_radr),
++      .c2h_byp_in_mm_wadr                   (c2h_byp_in_mm_wadr),
++      .c2h_byp_in_mm_len                    (c2h_byp_in_mm_len),
++      .c2h_byp_in_mm_mrkr_req               (c2h_byp_in_mm_mrkr_req),
++      .c2h_byp_in_mm_port_id                (c2h_byp_in_mm_port_id),
++      .c2h_byp_in_mm_sdi                    (c2h_byp_in_mm_sdi),
++      .c2h_byp_in_mm_qid                    (c2h_byp_in_mm_qid),
++      .c2h_byp_in_mm_error                  (c2h_byp_in_mm_error),
++      .c2h_byp_in_mm_func                   (c2h_byp_in_mm_func),
++      .c2h_byp_in_mm_cidx                   (c2h_byp_in_mm_cidx),
++      .c2h_byp_in_mm_no_dma                 (c2h_byp_in_mm_no_dma),
++      .c2h_byp_in_mm_rdy                    (c2h_byp_in_mm_rdy),
++
+       .c2h_byp_out_vld                      (c2h_byp_out_vld),
+       .c2h_byp_out_dsc                      (c2h_byp_out_dsc),
+       .c2h_byp_out_st_mm                    (c2h_byp_out_st_mm),
+@@ -455,6 +552,47 @@ module qdma_subsystem_qdma_wrapper #(
+       .qsts_out_vld                         (),     // output wire qsts_out_vld
+       .qsts_out_rdy                         (1'b1), // input wire qsts_out_rdy
+ 
++      .m_axi_araddr                         (m_axi_araddr),
++      .m_axi_arburst                        (m_axi_arburst),
++      .m_axi_arcache                        (m_axi_arcache),
++      .m_axi_arid                           (m_axi_arid),
++      .m_axi_arlen                          (m_axi_arlen),
++      .m_axi_arlock                         (m_axi_arlock),
++      .m_axi_arprot                         (m_axi_arprot),
++      // .m_axi_arqos                          (m_axi_arqos),
++      .m_axi_arready                        (m_axi_arready),
++      .m_axi_arsize                         (m_axi_arsize),
++      .m_axi_aruser                         (m_axi_aruser),
++      .m_axi_arvalid                        (m_axi_arvalid),
++      .m_axi_awaddr                         (m_axi_awaddr),
++      .m_axi_awburst                        (m_axi_awburst),
++      .m_axi_awcache                        (m_axi_awcache),
++      .m_axi_awid                           (m_axi_awid),
++      .m_axi_awlen                          (m_axi_awlen),
++      .m_axi_awlock                         (m_axi_awlock),
++      .m_axi_awprot                         (m_axi_awprot),
++      // .m_axi_awqos                          (m_axi_awqos),
++      .m_axi_awready                        (m_axi_awready),
++      .m_axi_awsize                         (m_axi_awsize),
++      .m_axi_awuser                         (m_axi_awuser),
++      .m_axi_awvalid                        (m_axi_awvalid),
++      .m_axi_bid                            (m_axi_bid),
++      .m_axi_bready                         (m_axi_bready),
++      .m_axi_bresp                          (m_axi_bresp),
++      .m_axi_bvalid                         (m_axi_bvalid),
++      .m_axi_rdata                          (m_axi_rdata),
++      .m_axi_rid                            (m_axi_rid),
++      .m_axi_rlast                          (m_axi_rlast),
++      .m_axi_rready                         (m_axi_rready),
++      .m_axi_rresp                          (m_axi_rresp),
++      .m_axi_rvalid                         (m_axi_rvalid),
++      .m_axi_wdata                          (m_axi_wdata),
++      .m_axi_wlast                          (m_axi_wlast),
++      .m_axi_wready                         (m_axi_wready),
++      .m_axi_wstrb                          (m_axi_wstrb),
++      .m_axi_wuser                          (m_axi_wuser),
++      .m_axi_wvalid                         (m_axi_wvalid),
++
+       .soft_reset_n                         (soft_reset_n),
+       .phy_ready                            (phy_ready)
+     );
+-- 
+2.34.1
+
