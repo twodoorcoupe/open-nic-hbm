@@ -1,0 +1,15 @@
+sim/tb/RP_model/pcie_4_c_rp.v
+sim/tb/RP_model/sys_clk_gen.v
+sim/tb/RP_model/sys_clk_gen_ds.v
+sim/tb/usrapp/usp_pci_exp_usrapp_cfg.v
+sim/tb/usrapp/usp_pci_exp_usrapp_com.v
+sim/tb/usrapp/usp_pci_exp_usrapp_rx.v
+sim/tb/usrapp/usp_pci_exp_usrapp_tx.sv
+sim/tb/RP_model/xilinx_pcie_uscale_rp.v
+sim/tb/RP_model/xp4c_usp_smsw_model_core_top.v
+sim/axi_file_tools/axi_stream.sv
+sim/axi_file_tools/file_reader.svh
+sim/axi_file_tools/file_writer.svh
+sim/axi_file_tools/make_delay.svh
+sim/axi_file_tools/open_nic_file_tools.sv
+sim/axi_file_tools/string_utils.svh
