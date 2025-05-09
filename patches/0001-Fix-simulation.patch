@@ -1,4 +1,4 @@
-From a70875776a764d55f4a0ecca222eb584709c8c2e Mon Sep 17 00:00:00 2001
+From 37c0cd257fe1ce438a50a3fa1ba7c9d3925a0208 Mon Sep 17 00:00:00 2001
 From: twodoorcoupe <giorgio.fontanive@outlook.com>
 Date: Fri, 9 May 2025 10:27:00 +0200
 Subject: [PATCH] Fix simulation
@@ -183,7 +183,7 @@ index d940c29..004e7f2 100644
  
  endmodule: cmac_subsystem
 diff --git a/src/open_nic_shell.sv b/src/open_nic_shell.sv
-index 2f67fba..c1910f2 100644
+index 2f67fba..ede6b2d 100644
 --- a/src/open_nic_shell.sv
 +++ b/src/open_nic_shell.sv
 @@ -27,7 +27,6 @@ module open_nic_shell #(
@@ -363,7 +363,7 @@ index 2f67fba..c1910f2 100644
      .satellite_uart_0_rxd (satellite_uart_0_rxd),
      .satellite_uart_0_txd (satellite_uart_0_txd),
 +
-+  `ifdef __simulation__
++  `ifndef __simulation__
      .satellite_gpio_0     (satellite_gpio),
 +  `endif
  
