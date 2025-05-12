@@ -1,8 +1,8 @@
-import nictest
+import axi_packets
 
-packet = nictest.make_ip_pkt(128)
+packet = axi_packets.make_ip_pkt(128)
 
-nictest.interface_manager.open_interfaces()
-nictest.send_packets("phy0", packet)
-nictest.interface_manager.close_interfaces()
+axi_packets.interface_manager.open_interfaces()
+axi_packets.send_packets("cmac0", packet)
+axi_packets.interface_manager.close_interfaces()
 

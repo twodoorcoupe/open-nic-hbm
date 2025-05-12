@@ -49,7 +49,7 @@
 //
 //-----------------------------------------------------------------------------
 //
-// Project    : PCI Express DMA 
+// Project    : PCI Express DMA
 // File       : board.v
 // Version    : 5.0
 //-----------------------------------------------------------------------------
@@ -75,7 +75,7 @@
 import open_nic_file_tools::*;
 
 module board;
-  
+
   parameter          REF_CLK_FREQ       = 0 ;      // 0 - 100 MHz, 1 - 125 MHz,  2 - 250 MHz
   localparam         REF_CLK_HALF_CYCLE = (REF_CLK_FREQ == 0) ? 5000 :
                                           (REF_CLK_FREQ == 1) ? 4000 :
@@ -130,10 +130,10 @@ module board;
   assign EP.s_axis_cmac_rx_sim_tlast     = phy_send.tlast;
   assign EP.s_axis_cmac_rx_sim_tuser_err = phy_send.tuser;
   assign phy_send.tready = sys_rst_n;
-  
+
   FileReader #(C_DATA_WIDTH, 1) phy_in_reader;
   initial begin
-    phy_in_reader = new ("", phy_send);  //TODO: Set macro to read from
+    phy_in_reader = new ($sformatf("%s/%s", `WORK_DIR, "axi_in_cmac0.txt"), phy_send);
     phy_send.reset();
   end
 
@@ -204,7 +204,7 @@ module board;
   //
 
 
-  open_nic_shell 
+  open_nic_shell
   #(
       .BUILD_TIMESTAMP (32'h01010000),
       .MIN_PKT_LEN     (64),
@@ -224,7 +224,7 @@ module board;
     .pcie_refclk_n (ep_sys_clk_n),
     .pcie_rstn (sys_rst_n)
   );
- 
+
 
   //------------------------------------------------------------------------------//
   // Simulation Root Port Model

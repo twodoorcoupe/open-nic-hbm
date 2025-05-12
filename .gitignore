@@ -1,4 +1,9 @@
 build/
+
+sim/axi_packets/__pycache__
+sim/axi_in_cmac0.txt
+sim/axi_in_cmac1.txt
+
 *.jou
 *.log
 *.str

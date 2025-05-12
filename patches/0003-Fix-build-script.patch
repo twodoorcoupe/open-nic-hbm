@@ -1,4 +1,4 @@
-From 4daaaa2d810aad488909a4dfadce56ba43f968db Mon Sep 17 00:00:00 2001
+From 60eaacb83f402d9c7a593608232219587c706f28 Mon Sep 17 00:00:00 2001
 From: twodoorcoupe <giorgio.fontanive@outlook.com>
 Date: Fri, 9 May 2025 19:28:25 +0200
 Subject: [PATCH] Fix build script
@@ -30,7 +30,7 @@ index 185f5af..ca759b5 100644
 +read_verilog -quiet {box_322mhz/box_322mhz_address_map_inst.vh box_322mhz/user_plugin_322mhz_inst.vh}
 \ No newline at end of file
 diff --git a/script/build.tcl b/script/build.tcl
-index 6215589..b215d82 100644
+index 6215589..4d75cef 100644
 --- a/script/build.tcl
 +++ b/script/build.tcl
 @@ -95,12 +95,12 @@ set src_dir ${root_dir}/src
@@ -121,7 +121,7 @@ index 6215589..b215d82 100644
      append verilog_define " " "__zynq_family__"
  }
  set_property verilog_define $verilog_define [current_fileset]
-+set_property verilog_define "__simulation__ __${board}__" [get_filesets sim_1]
++set_property verilog_define "__simulation__ __${board}__ WORK_DIR=\\\\\"${root_dir}/../sim\\\\\"" [get_filesets sim_1]
  
  # Read IPs from finished IP runs
  # - Some IPs are board-specific and will be ignored for other board targets

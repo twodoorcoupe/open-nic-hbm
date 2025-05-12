@@ -1,7 +1,6 @@
 import difflib
 import logging
 import os
-import subprocess
 
 # from .axi_lite import get_transactions
 from .axi_stream import axis_to_packets, set_globals
@@ -12,7 +11,7 @@ NUM_QDMA = 1
 NUM_PHYS_FUNC = 1
 NUM_QUEUE = 512
 USER_BOX = "__full__"
-SIM_LOCATION = os.environ["HOME"]
+SIM_LOCATION = os.environ["PWD"]
 
 
 class SimulationError(Exception):
@@ -30,7 +29,7 @@ class InterfacesManager:
 
     def _get_interface_names(self):
         for i in range(NUM_CMAC_PORT):
-            yield f"phy{i}"
+            yield f"cmac{i}"
         if self.box == "__250mhz__":
             interfaces_range = NUM_QDMA * NUM_PHYS_FUNC
         # for i in range(interfaces_range):
@@ -51,7 +50,7 @@ class InterfacesManager:
 
     def _get_interface(self, name):
         if name not in self.interfaces.keys():
-            log.error(f"Invalid interface name {name}")
+            # log.error(f"Invalid interface name {name}")
             return
         return self.interfaces[name]
 
