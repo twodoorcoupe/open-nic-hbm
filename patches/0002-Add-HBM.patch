@@ -1,22 +1,22 @@
-From a0bce0e587e3d2f4672de5af66a6a641eb554050 Mon Sep 17 00:00:00 2001
+From dcb4405678bc8ef415391ac837ba120f8f9c5b60 Mon Sep 17 00:00:00 2001
 From: twodoorcoupe <giorgio.fontanive@outlook.com>
 Date: Fri, 9 May 2025 10:33:32 +0200
 Subject: [PATCH] Add HBM
 
 ---
- src/qdma_subsystem/qdma_hbm_bd.tcl            | 426 ++++++++++++++++++
- src/qdma_subsystem/qdma_subsystem.sv          | 230 +++++++++-
+ src/qdma_subsystem/qdma_hbm_bd.tcl            | 422 ++++++++++++++++++
+ src/qdma_subsystem/qdma_subsystem.sv          | 229 +++++++++-
  .../qdma_subsystem_qdma_wrapper.v             | 138 ++++++
  .../vivado_ip/qdma_no_sriov_au55c.tcl         |  72 ++-
- 4 files changed, 823 insertions(+), 43 deletions(-)
+ 4 files changed, 818 insertions(+), 43 deletions(-)
  create mode 100644 src/qdma_subsystem/qdma_hbm_bd.tcl
 
 diff --git a/src/qdma_subsystem/qdma_hbm_bd.tcl b/src/qdma_subsystem/qdma_hbm_bd.tcl
 new file mode 100644
-index 0000000..7145a59
+index 0000000..fd0d311
 --- /dev/null
 +++ b/src/qdma_subsystem/qdma_hbm_bd.tcl
-@@ -0,0 +1,426 @@
+@@ -0,0 +1,422 @@
 +
 +################################################################
 +# This is a generated script based on design: qdma_hbm_bd
@@ -114,7 +114,7 @@ index 0000000..7145a59
 +   set errMsg "Design <$design_name> already exists in your project, please set the variable <design_name> to another value."
 +   set nRet 1
 +} elseif { [get_files -quiet ${design_name}.bd] ne "" } {
-+   # USE CASES: 
++   # USE CASES:
 +   #    6) Current opened design, has components, but diff names, design_name exists in project.
 +   #    7) No opened design, design_name exists in project.
 +
@@ -148,7 +148,7 @@ index 0000000..7145a59
 +##################################################################
 +set bCheckIPs 1
 +if { $bCheckIPs == 1 } {
-+   set list_check_ips "\ 
++   set list_check_ips "\
 +xilinx.com:ip:hbm:1.0\
 +xilinx.com:ip:clk_wiz:6.0\
 +xilinx.com:ip:proc_sys_reset:5.0\
@@ -250,7 +250,6 @@ index 0000000..7145a59
 +
 +
 +  # Create ports
-+  set aresetn [ create_bd_port -dir I -type rst aresetn ]
 +  set axi_resetn [ create_bd_port -dir I axi_resetn ]
 +  set hbm_ref_clk [ create_bd_port -dir I -type clk -freq_hz 100000000 hbm_ref_clk ]
 +  set axi_clk [ create_bd_port -dir I -type clk -freq_hz 250000000 axi_clk ]
@@ -353,10 +352,9 @@ index 0000000..7145a59
 +  connect_bd_net -net qdma_0_axi_aresetn  [get_bd_ports axi_resetn] \
 +  [get_bd_pins hbm_0/AXI_15_ARESET_N] \
 +  [get_bd_pins hbm_0/AXI_16_ARESET_N] \
-+  [get_bd_pins smartconnect_0/aresetn]
-+  connect_bd_net -net resetn_0_1  [get_bd_ports aresetn] \
-+  [get_bd_pins proc_sys_reset_0/ext_reset_in] \
-+  [get_bd_pins clk_wiz_0/resetn]
++  [get_bd_pins smartconnect_0/aresetn] \
++  [get_bd_pins clk_wiz_0/resetn] \
++  [get_bd_pins proc_sys_reset_0/ext_reset_in]
 +
 +  # Create address segments
 +  assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
@@ -441,10 +439,8 @@ index 0000000..7145a59
 +##################################################################
 +
 +create_root_design ""
-+
-+
 diff --git a/src/qdma_subsystem/qdma_subsystem.sv b/src/qdma_subsystem/qdma_subsystem.sv
-index 8e2a4a0..e863e71 100644
+index 8e2a4a0..4647043 100644
 --- a/src/qdma_subsystem/qdma_subsystem.sv
 +++ b/src/qdma_subsystem/qdma_subsystem.sv
 @@ -181,6 +181,20 @@ module qdma_subsystem #(
@@ -569,7 +565,7 @@ index 8e2a4a0..e863e71 100644
    assign c2h_byp_out_rdy            = 1'b1;
    assign c2h_byp_in_st_csh_vld      = 1'b0;
    assign c2h_byp_in_st_csh_addr     = 0;
-@@ -251,6 +345,67 @@ module qdma_subsystem #(
+@@ -251,6 +345,66 @@ module qdma_subsystem #(
    assign c2h_byp_in_st_csh_func     = 0;
    assign c2h_byp_in_st_csh_pfch_tag = 0;
  
@@ -628,7 +624,6 @@ index 8e2a4a0..e863e71 100644
 +    .S00_AXI_0_wuser                     (m_axi_wuser),
 +    .S00_AXI_0_wvalid                    (m_axi_wvalid),
 +
-+    .aresetn                             (pcie_rstn),
 +    .axi_clk                             (axis_aclk),
 +    .axi_resetn                          (powerup_rstn),
 +    .hbm_ref_clk                         (hbm_ref_clk)
@@ -637,7 +632,7 @@ index 8e2a4a0..e863e71 100644
    qdma_subsystem_qdma_wrapper #(
      .QDMA_ID (QDMA_ID)
    ) qdma_wrapper_inst (
-@@ -343,6 +498,19 @@ module qdma_subsystem #(
+@@ -343,6 +497,19 @@ module qdma_subsystem #(
      .h2c_byp_in_st_no_dma            (h2c_byp_in_st_no_dma),
      .h2c_byp_in_st_rdy               (h2c_byp_in_st_rdy),
  
@@ -657,7 +652,7 @@ index 8e2a4a0..e863e71 100644
      .c2h_byp_out_vld                 (c2h_byp_out_vld),
      .c2h_byp_out_dsc                 (c2h_byp_out_dsc),
      .c2h_byp_out_st_mm               (c2h_byp_out_st_mm),
-@@ -365,6 +533,60 @@ module qdma_subsystem #(
+@@ -365,6 +532,60 @@ module qdma_subsystem #(
      .c2h_byp_in_st_csh_pfch_tag      (c2h_byp_in_st_csh_pfch_tag),
      .c2h_byp_in_st_csh_rdy           (c2h_byp_in_st_csh_rdy),
  
@@ -718,7 +713,7 @@ index 8e2a4a0..e863e71 100644
      .pcie_refclk                     (pcie_refclk),
      .pcie_refclk_gt                  (pcie_refclk_gt),
      .pcie_rstn                       (pcie_rstn),
-@@ -377,13 +599,13 @@ module qdma_subsystem #(
+@@ -377,13 +598,13 @@ module qdma_subsystem #(
      .axis_aclk                       (axis_aclk),
  
  `ifdef __au55n__

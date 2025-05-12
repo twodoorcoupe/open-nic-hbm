@@ -1,4 +1,4 @@
-From 3a78b14fd2f35536971d3ee9c613e580f4dd6742 Mon Sep 17 00:00:00 2001
+From 4daaaa2d810aad488909a4dfadce56ba43f968db Mon Sep 17 00:00:00 2001
 From: twodoorcoupe <giorgio.fontanive@outlook.com>
 Date: Fri, 9 May 2025 19:28:25 +0200
 Subject: [PATCH] Fix build script
@@ -6,8 +6,8 @@ Subject: [PATCH] Fix build script
 ---
  plugin/p2p/build_box_250mhz.tcl |  1 +
  plugin/p2p/build_box_322mhz.tcl |  1 +
- script/build.tcl                | 56 ++++++---------------------------
- 3 files changed, 12 insertions(+), 46 deletions(-)
+ script/build.tcl                | 60 +++++++--------------------------
+ 3 files changed, 14 insertions(+), 48 deletions(-)
 
 diff --git a/plugin/p2p/build_box_250mhz.tcl b/plugin/p2p/build_box_250mhz.tcl
 index e4ed8f0..ccf3c1f 100644
@@ -30,7 +30,7 @@ index 185f5af..ca759b5 100644
 +read_verilog -quiet {box_322mhz/box_322mhz_address_map_inst.vh box_322mhz/user_plugin_322mhz_inst.vh}
 \ No newline at end of file
 diff --git a/script/build.tcl b/script/build.tcl
-index 6215589..827463d 100644
+index 6215589..b215d82 100644
 --- a/script/build.tcl
 +++ b/script/build.tcl
 @@ -95,12 +95,12 @@ set src_dir ${root_dir}/src
@@ -85,6 +85,15 @@ index 6215589..827463d 100644
  set fp [open "${build_dir}/DESIGN_PARAMETERS" w]
  foreach {param val} [array get design_params] {
      puts $fp "$param $val"
+@@ -223,7 +195,7 @@ close $fp
+ 
+ # Update the board store
+ if {[string equal $board_repo ""]} {
+-    set_param board.repoPaths "${root_dir}/board_files"    
++    set_param board.repoPaths "${root_dir}/board_files"
+     # xhub::refresh_catalog [xhub::get_xstores xilinx_board_store]
+ } else {
+     set_param board.repoPaths $board_repo
 @@ -321,21 +293,7 @@ dict for {module module_dir} $module_dict {
  close_project
  
@@ -112,11 +121,11 @@ index 6215589..827463d 100644
      append verilog_define " " "__zynq_family__"
  }
  set_property verilog_define $verilog_define [current_fileset]
-+set_property verilog_define "__simulation__" [get_filesets sim_1]
++set_property verilog_define "__simulation__ __${board}__" [get_filesets sim_1]
  
  # Read IPs from finished IP runs
  # - Some IPs are board-specific and will be ignored for other board targets
-@@ -351,6 +310,11 @@ dict for {ip ip_dir} $ip_dict {
+@@ -351,12 +310,17 @@ dict for {ip ip_dir} $ip_dict {
      read_ip -quiet ${ip_dir}/${ip}.xci
  }
  
@@ -128,6 +137,13 @@ index 6215589..827463d 100644
  # Read user plugin files
  set include_dirs [get_property include_dirs [current_fileset]]
  foreach freq [list 250mhz 322mhz] {
+     set box "box_$freq"
+     set box_plugin ${user_plugin}/${box}
+-    
++
+     if {![file exists $box_plugin] || ![file exists ${user_plugin}/build_${box}.tcl]} {
+         set box_plugin ${plugin_dir}/p2p/${box}
+     }
 -- 
 2.34.1
 
