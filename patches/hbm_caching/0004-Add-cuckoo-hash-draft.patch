@@ -1,0 +1,1252 @@
+From 4e87830ea6163bb236d315954ea2158a02398467 Mon Sep 17 00:00:00 2001
+From: twodoorcoupe <giorgio.fontanive@outlook.com>
+Date: Tue, 1 Jul 2025 10:20:17 +0200
+Subject: [PATCH] Add cuckoo hash draft
+
+---
+ src/qdma_subsystem/qdma_hbm_bd.tcl   | 141 +++----
+ src/qdma_subsystem/qdma_subsystem.sv | 423 +++++++++++++++++--
+ src/utility/cuckoo_hash.sv           | 596 +++++++++++++++++++++++++++
+ 3 files changed, 1047 insertions(+), 113 deletions(-)
+ create mode 100644 src/utility/cuckoo_hash.sv
+
+diff --git a/src/qdma_subsystem/qdma_hbm_bd.tcl b/src/qdma_subsystem/qdma_hbm_bd.tcl
+index fd0d311..ac8ef8a 100644
+--- a/src/qdma_subsystem/qdma_hbm_bd.tcl
++++ b/src/qdma_subsystem/qdma_hbm_bd.tcl
+@@ -95,7 +95,7 @@ if { ${design_name} eq "" } {
+    set errMsg "Design <$design_name> already exists in your project, please set the variable <design_name> to another value."
+    set nRet 1
+ } elseif { [get_files -quiet ${design_name}.bd] ne "" } {
+-   # USE CASES:
++   # USE CASES: 
+    #    6) Current opened design, has components, but diff names, design_name exists in project.
+    #    7) No opened design, design_name exists in project.
+ 
+@@ -129,7 +129,7 @@ set bCheckIPsPassed 1
+ ##################################################################
+ set bCheckIPs 1
+ if { $bCheckIPs == 1 } {
+-   set list_check_ips "\
++   set list_check_ips "\ 
+ xilinx.com:ip:hbm:1.0\
+ xilinx.com:ip:clk_wiz:6.0\
+ xilinx.com:ip:proc_sys_reset:5.0\
+@@ -197,7 +197,7 @@ proc create_root_design { parentCell } {
+ 
+ 
+   # Create interface ports
+-  set S00_AXI_0 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 S00_AXI_0 ]
++  set s_axi [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 s_axi ]
+   set_property -dict [ list \
+    CONFIG.ADDR_WIDTH {64} \
+    CONFIG.ARUSER_WIDTH {32} \
+@@ -227,7 +227,7 @@ proc create_root_design { parentCell } {
+    CONFIG.SUPPORTS_NARROW_BURST {0} \
+    CONFIG.WUSER_BITS_PER_BYTE {0} \
+    CONFIG.WUSER_WIDTH {64} \
+-   ] $S00_AXI_0
++   ] $s_axi
+ 
+ 
+   # Create ports
+@@ -235,6 +235,7 @@ proc create_root_design { parentCell } {
+   set hbm_ref_clk [ create_bd_port -dir I -type clk -freq_hz 100000000 hbm_ref_clk ]
+   set axi_clk [ create_bd_port -dir I -type clk -freq_hz 250000000 axi_clk ]
+   set_property -dict [ list \
++   CONFIG.ASSOCIATED_BUSIF {s_axi} \
+    CONFIG.CLK_DOMAIN {qdma_hbm_bd_qdma_0_0_axi_aclk} \
+  ] $axi_clk
+ 
+@@ -308,7 +309,7 @@ proc create_root_design { parentCell } {
+ 
+ 
+   # Create interface connections
+-  connect_bd_intf_net -intf_net S00_AXI_0_1 [get_bd_intf_ports S00_AXI_0] [get_bd_intf_pins smartconnect_0/S00_AXI]
++  connect_bd_intf_net -intf_net S00_AXI_0_1 [get_bd_intf_ports s_axi] [get_bd_intf_pins smartconnect_0/S00_AXI]
+   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_pins smartconnect_0/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_15_8HI]
+   connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins smartconnect_0/M01_AXI] [get_bd_intf_pins hbm_0/SAXI_16_8HI]
+ 
+@@ -338,72 +339,72 @@ proc create_root_design { parentCell } {
+   [get_bd_pins proc_sys_reset_0/ext_reset_in]
+ 
+   # Create address segments
+-  assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
+-  assign_bd_address -offset 0x10000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM00_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM00] -force
+-  assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
+-  assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
+-  assign_bd_address -offset 0x50000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM02_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM02] -force
+-  assign_bd_address -offset 0x60000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM03] -force
+-  assign_bd_address -offset 0x70000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM03_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM03] -force
+-  assign_bd_address -offset 0x80000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM04] -force
+-  assign_bd_address -offset 0x90000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM04_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM04] -force
+-  assign_bd_address -offset 0xA0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM05] -force
+-  assign_bd_address -offset 0xB0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM05_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM05] -force
+-  assign_bd_address -offset 0xC0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM06] -force
+-  assign_bd_address -offset 0xD0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM06_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM06] -force
+-  assign_bd_address -offset 0xE0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM07] -force
+-  assign_bd_address -offset 0xF0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM07_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM07] -force
+-  assign_bd_address -offset 0x000100000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM08] -force
+-  assign_bd_address -offset 0x000110000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM08_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM08] -force
+-  assign_bd_address -offset 0x000120000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM09] -force
+-  assign_bd_address -offset 0x000130000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM09_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM09] -force
+-  assign_bd_address -offset 0x000140000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM10] -force
+-  assign_bd_address -offset 0x000150000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM10_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM10] -force
+-  assign_bd_address -offset 0x000160000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM11] -force
+-  assign_bd_address -offset 0x000170000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM11_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM11] -force
+-  assign_bd_address -offset 0x000180000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM12] -force
+-  assign_bd_address -offset 0x000190000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM12_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM12] -force
+-  assign_bd_address -offset 0x0001A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM13] -force
+-  assign_bd_address -offset 0x0001B0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM13_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM13] -force
+-  assign_bd_address -offset 0x0001C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM14] -force
+-  assign_bd_address -offset 0x0001D0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM14_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM14] -force
+-  assign_bd_address -offset 0x0001E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM15] -force
+-  assign_bd_address -offset 0x0001F0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM15_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM15] -force
+-  assign_bd_address -offset 0x000200000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM16] -force
+-  assign_bd_address -offset 0x000210000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM16_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM16] -force
+-  assign_bd_address -offset 0x000220000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM17] -force
+-  assign_bd_address -offset 0x000230000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM17_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM17] -force
+-  assign_bd_address -offset 0x000240000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM18] -force
+-  assign_bd_address -offset 0x000250000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM18_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM18] -force
+-  assign_bd_address -offset 0x000260000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM19] -force
+-  assign_bd_address -offset 0x000270000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM19_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM19] -force
+-  assign_bd_address -offset 0x000280000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM20] -force
+-  assign_bd_address -offset 0x000290000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM20_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM20] -force
+-  assign_bd_address -offset 0x0002A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM21] -force
+-  assign_bd_address -offset 0x0002B0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM21_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM21] -force
+-  assign_bd_address -offset 0x0002C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM22] -force
+-  assign_bd_address -offset 0x0002D0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM22_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM22] -force
+-  assign_bd_address -offset 0x0002E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM23] -force
+-  assign_bd_address -offset 0x0002F0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM23_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM23] -force
+-  assign_bd_address -offset 0x000300000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM24] -force
+-  assign_bd_address -offset 0x000310000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM24_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM24] -force
+-  assign_bd_address -offset 0x000320000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM25] -force
+-  assign_bd_address -offset 0x000330000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM25_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM25] -force
+-  assign_bd_address -offset 0x000340000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM26] -force
+-  assign_bd_address -offset 0x000350000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM26_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM26] -force
+-  assign_bd_address -offset 0x000360000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM27] -force
+-  assign_bd_address -offset 0x000370000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM27_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM27] -force
+-  assign_bd_address -offset 0x000380000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM28] -force
+-  assign_bd_address -offset 0x000390000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM28_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM28] -force
+-  assign_bd_address -offset 0x0003A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM29] -force
+-  assign_bd_address -offset 0x0003B0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM29_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM29] -force
+-  assign_bd_address -offset 0x0003C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM30] -force
+-  assign_bd_address -offset 0x0003D0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM30_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM30] -force
+-  assign_bd_address -offset 0x0003E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM31] -force
+-  assign_bd_address -offset 0x0003F0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM31_1 -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM31] -force
++  assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
++  assign_bd_address -offset 0x10000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM00_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM00] -force
++  assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
++  assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
++  assign_bd_address -offset 0x50000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM02_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM02] -force
++  assign_bd_address -offset 0x60000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM03] -force
++  assign_bd_address -offset 0x70000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM03_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM03] -force
++  assign_bd_address -offset 0x80000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM04] -force
++  assign_bd_address -offset 0x90000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM04_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM04] -force
++  assign_bd_address -offset 0xA0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM05] -force
++  assign_bd_address -offset 0xB0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM05_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM05] -force
++  assign_bd_address -offset 0xC0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM06] -force
++  assign_bd_address -offset 0xD0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM06_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM06] -force
++  assign_bd_address -offset 0xE0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM07] -force
++  assign_bd_address -offset 0xF0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM07_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM07] -force
++  assign_bd_address -offset 0x000100000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM08] -force
++  assign_bd_address -offset 0x000110000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM08_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM08] -force
++  assign_bd_address -offset 0x000120000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM09] -force
++  assign_bd_address -offset 0x000130000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM09_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM09] -force
++  assign_bd_address -offset 0x000140000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM10] -force
++  assign_bd_address -offset 0x000150000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM10_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM10] -force
++  assign_bd_address -offset 0x000160000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM11] -force
++  assign_bd_address -offset 0x000170000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM11_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM11] -force
++  assign_bd_address -offset 0x000180000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM12] -force
++  assign_bd_address -offset 0x000190000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM12_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM12] -force
++  assign_bd_address -offset 0x0001A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM13] -force
++  assign_bd_address -offset 0x0001B0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM13_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM13] -force
++  assign_bd_address -offset 0x0001C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM14] -force
++  assign_bd_address -offset 0x0001D0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM14_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM14] -force
++  assign_bd_address -offset 0x0001E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM15] -force
++  assign_bd_address -offset 0x0001F0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM15_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM15] -force
++  assign_bd_address -offset 0x000200000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM16] -force
++  assign_bd_address -offset 0x000210000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM16_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM16] -force
++  assign_bd_address -offset 0x000220000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM17] -force
++  assign_bd_address -offset 0x000230000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM17_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM17] -force
++  assign_bd_address -offset 0x000240000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM18] -force
++  assign_bd_address -offset 0x000250000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM18_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM18] -force
++  assign_bd_address -offset 0x000260000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM19] -force
++  assign_bd_address -offset 0x000270000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM19_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM19] -force
++  assign_bd_address -offset 0x000280000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM20] -force
++  assign_bd_address -offset 0x000290000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM20_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM20] -force
++  assign_bd_address -offset 0x0002A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM21] -force
++  assign_bd_address -offset 0x0002B0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM21_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM21] -force
++  assign_bd_address -offset 0x0002C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM22] -force
++  assign_bd_address -offset 0x0002D0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM22_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM22] -force
++  assign_bd_address -offset 0x0002E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM23] -force
++  assign_bd_address -offset 0x0002F0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM23_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM23] -force
++  assign_bd_address -offset 0x000300000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM24] -force
++  assign_bd_address -offset 0x000310000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM24_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM24] -force
++  assign_bd_address -offset 0x000320000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM25] -force
++  assign_bd_address -offset 0x000330000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM25_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM25] -force
++  assign_bd_address -offset 0x000340000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM26] -force
++  assign_bd_address -offset 0x000350000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM26_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM26] -force
++  assign_bd_address -offset 0x000360000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM27] -force
++  assign_bd_address -offset 0x000370000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM27_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM27] -force
++  assign_bd_address -offset 0x000380000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM28] -force
++  assign_bd_address -offset 0x000390000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM28_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM28] -force
++  assign_bd_address -offset 0x0003A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM29] -force
++  assign_bd_address -offset 0x0003B0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM29_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM29] -force
++  assign_bd_address -offset 0x0003C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM30] -force
++  assign_bd_address -offset 0x0003D0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM30_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM30] -force
++  assign_bd_address -offset 0x0003E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM31] -force
++  assign_bd_address -offset 0x0003F0000000 -range 0x10000000 -with_name SEG_hbm_0_HBM_MEM31_1 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM31] -force
+ 
+   # Exclude Address Segments
+-  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces S00_AXI_0] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM01]
++  exclude_bd_addr_seg -offset 0x000420000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM01]
+ 
+ 
+   # Restore current instance
+@@ -420,3 +421,5 @@ proc create_root_design { parentCell } {
+ ##################################################################
+ 
+ create_root_design ""
++
++
+diff --git a/src/qdma_subsystem/qdma_subsystem.sv b/src/qdma_subsystem/qdma_subsystem.sv
+index 4647043..9ce1e63 100644
+--- a/src/qdma_subsystem/qdma_subsystem.sv
++++ b/src/qdma_subsystem/qdma_subsystem.sv
+@@ -358,51 +358,386 @@ module qdma_subsystem #(
+   assign c2h_byp_in_mm_cidx         = 0;
+   assign c2h_byp_in_mm_no_dma       = 1'b0;
+ 
++  logic                    axis_cuckoo_in_tvalid;
++  logic          [511:0]   axis_cuckoo_in_tdata;
++  logic           [63:0]   axis_cuckoo_in_tkeep;
++  logic                    axis_cuckoo_in_tuser;
++  logic                    axis_cuckoo_in_tlast;
++  logic                    axis_cuckoo_in_tready;
++
++  logic                    axis_cuckoo_out_tvalid;
++  logic          [511:0]   axis_cuckoo_out_tdata;
++  logic           [63:0]   axis_cuckoo_out_tkeep;
++  logic                    axis_cuckoo_out_tuser;
++  logic                    axis_cuckoo_out_tlast;
++  logic                    axis_cuckoo_out_tready;
++
++  logic                    axis_from_dm_tvalid;
++  logic          [511:0]   axis_from_dm_tdata;
++  logic           [63:0]   axis_from_dm_tkeep;
++  logic                    axis_from_dm_tlast;
++  logic                    axis_from_dm_tready;
++
++  logic                    axis_to_dm_tvalid;
++  logic          [511:0]   axis_to_dm_tdata;
++  logic           [63:0]   axis_to_dm_tkeep;
++  logic                    axis_to_dm_tlast;
++  logic                    axis_to_dm_tready;
++
++  logic                    axis_dm_mm2s_cmd_tvalid;
++  logic           [79:0]   axis_dm_mm2s_cmd_tdata;
++  logic                    axis_dm_mm2s_cmd_tready;
++
++  logic                    axis_dm_s2mm_cmd_tvalid;
++  logic           [79:0]   axis_dm_s2mm_cmd_tdata;
++  logic                    axis_dm_s2mm_cmd_tready;
++
++  logic            [7:0]   axis_mm2s_sts_tdata;
++  logic                    axis_mm2s_sts_tkeep;
++  logic                    axis_mm2s_sts_tlast;
++  logic                    axis_mm2s_sts_tready;
++  logic                    axis_mm2s_sts_tvalid;
++
++  logic            [7:0]   axis_s2mm_sts_tdata;
++  logic                    axis_s2mm_sts_tkeep;
++  logic                    axis_s2mm_sts_tlast;
++  logic                    axis_s2mm_sts_tready;
++  logic                    axis_s2mm_sts_tvalid;
++
++  logic            [33:0]  axi_araddr   [4];
++  logic             [1:0]  axi_arburst  [4];
++  logic             [3:0]  axi_arcache  [4];
++  logic             [3:0]  axi_arid     [4];
++  logic             [3:0]  axi_arlen    [4];
++  logic             [1:0]  axi_arlock   [4];
++  logic             [2:0]  axi_arprot   [4];
++  logic                    axi_arready  [4];
++  logic             [2:0]  axi_arsize   [4];
++  logic                    axi_arvalid  [4];
++  logic            [33:0]  axi_awaddr   [4];
++  logic             [1:0]  axi_awburst  [4];
++  logic             [3:0]  axi_awcache  [4];
++  logic             [3:0]  axi_awid     [4];
++  logic             [3:0]  axi_awlen    [4];
++  logic             [1:0]  axi_awlock   [4];
++  logic             [2:0]  axi_awprot   [4];
++  logic                    axi_awready  [4];
++  logic             [2:0]  axi_awsize   [4];
++  logic                    axi_awvalid  [4];
++  logic             [3:0]  axi_bid      [4];
++  logic                    axi_bready   [4];
++  logic             [1:0]  axi_bresp    [4];
++  logic                    axi_bvalid   [4];
++  logic           [255:0]  axi_rdata    [4];
++  logic             [3:0]  axi_rid      [4];
++  logic                    axi_rlast    [4];
++  logic                    axi_rready   [4];
++  logic             [1:0]  axi_rresp    [4];
++  logic                    axi_rvalid   [4];
++  logic           [255:0]  axi_wdata    [4];
++  logic                    axi_wlast    [4];
++  logic                    axi_wready   [4];
++  logic            [31:0]  axi_wstrb    [4];
++  logic                    axi_wvalid   [4];
++
++  // We test only one write operation at a time for now
++  assign axis_cuckoo_in_tvalid  = s_axis_c2h_tvalid;
++  assign axis_cuckoo_in_tdata   = s_axis_c2h_tdata;
++  assign axis_cuckoo_in_tkeep   = s_axis_c2h_tkeep;
++  assign axis_cuckoo_in_tlast   = s_axis_c2h_tlast;
++  assign axis_cuckoo_in_tuser   = 1'b0;
++  // assign s_axis_c2h_tready      = axis_cuckoo_in_tready;
++  assign axis_cuckoo_out_tready = 1'b1;
++
++  assign axis_s2mm_sts_tready   = 1'b1;
++  assign axis_mm2s_sts_tready   = 1'b1;
++
++  localparam logic [23:0] HASH_MATRIX [4][63:0] = '{
++    {24'h899fbc, 24'h0dff9c, 24'h6225ef, 24'hb6934f, 24'h867039, 24'ha63515, 24'hc23c4a, 24'h987e8d, 24'h9491d8, 24'h289e8a, 24'h10e9b7, 24'ha32984, 24'he5dff7, 24'h4568f0, 24'h676d7d, 24'hb13607, 24'hebe865, 24'h5ee97c, 24'hc6f720, 24'h8007d0, 24'h952961, 24'hb4ea32, 24'he99ca1, 24'ha2b46c, 24'h1c2939, 24'hc31e5a, 24'h5ee7d6, 24'h190034, 24'he6ca15, 24'h61f50e, 24'he61355, 24'h5e73f7, 24'h1ecdb0, 24'hddd028, 24'h064e31, 24'h36118a, 24'he4abbc, 24'hf1ec35, 24'h0cd837, 24'hca2820, 24'he60382, 24'h4cfe6f, 24'h509027, 24'h3cfc87, 24'h707339, 24'h9fe1ae, 24'h0344f6, 24'ha106b1, 24'hb898f3, 24'h85778b, 24'hb9aa9d, 24'h86479e, 24'h1ce886, 24'hfbfb98, 24'h81b444, 24'h0740a2, 24'h93041a, 24'h513a99, 24'ha5d6cc, 24'h509488, 24'h3d8d1a, 24'hd091bc, 24'h499d1f, 24'h09e917},
++    {24'h5ef279, 24'hc3ef86, 24'h23040b, 24'h2f1f18, 24'hf01bca, 24'hfa0b4c, 24'hc4ee0a, 24'h88c8cc, 24'h1d5e2b, 24'h189b04, 24'ha9d369, 24'h76e7f7, 24'h4177cf, 24'h8b8143, 24'h62bd13, 24'ha73a5f, 24'h0690d6, 24'h0c9725, 24'h34b2c0, 24'h9eda4f, 24'h5a3159, 24'hdbfcd1, 24'h1bba46, 24'ha4c038, 24'h1cd8e8, 24'h90f62d, 24'hf1c857, 24'he4ad98, 24'h19117a, 24'h243b48, 24'h1d0289, 24'h662303, 24'ha2f477, 24'h0e046a, 24'hbe5f53, 24'h767ffd, 24'h61ccab, 24'h662eaf, 24'h2e6b2f, 24'h48e57f, 24'h075cf4, 24'hde01dc, 24'h04b182, 24'hd72b49, 24'hc7b90f, 24'h419dce, 24'h93d9b7, 24'h7be666, 24'h43f9bb, 24'h70ddb1, 24'hae344a, 24'h09e825, 24'ha5ade0, 24'hc663ba, 24'h8707e5, 24'ha011ae, 24'ha5b939, 24'h04116b, 24'hc5de2a, 24'h22a80a, 24'ha91f3b, 24'h197b75, 24'h3e4aed, 24'h7fe25b},
++    {24'h9b1bb3, 24'h13dd3f, 24'ha345ee, 24'h468e9b, 24'h1b232a, 24'h1e7a55, 24'hf22260, 24'h80ff34, 24'hfc451a, 24'h0bcb86, 24'he7ba6e, 24'h8b2b02, 24'h171031, 24'h632bfe, 24'hf80306, 24'hf260fb, 24'hc19e2e, 24'h393c2c, 24'hc6cad4, 24'hf91285, 24'h7b9b1b, 24'hc6a69b, 24'h272b55, 24'had7f84, 24'ha2ac68, 24'hf6e2d5, 24'h954dc2, 24'hbfd3aa, 24'h3bdad6, 24'hd678bd, 24'hfe8587, 24'ha0ecb5, 24'hbd1d6f, 24'hfa3b40, 24'h7538ec, 24'h24d77f, 24'h9c3ebb, 24'hfd019d, 24'h6886f0, 24'hd544a3, 24'hca0820, 24'h420a16, 24'h0caa28, 24'he30671, 24'h8483c9, 24'h8f26b7, 24'hd43515, 24'hae2a24, 24'h26c851, 24'h34a235, 24'h491eca, 24'hc5cee6, 24'h2af439, 24'h0e3e0d, 24'h55f3c3, 24'h77bb25, 24'h5f5910, 24'h6a65e7, 24'h4951e8, 24'hc7b7f9, 24'h754de5, 24'h6b2b56, 24'hd41a73, 24'hf61612},
++    {24'hfc1896, 24'hddb0d8, 24'hdc44ea, 24'hc36f65, 24'h312223, 24'hc20d3d, 24'h4d5427, 24'h9a7045, 24'h4b8de3, 24'h0e4a73, 24'h33a059, 24'hfd4572, 24'hfc6084, 24'h601f32, 24'hcea1ca, 24'h6bd98a, 24'h8761dd, 24'h29d480, 24'h5a55f1, 24'h620913, 24'h5630db, 24'h4bb7e8, 24'h85d3c0, 24'h0921d9, 24'h965dc2, 24'h8efae8, 24'hebd091, 24'hc2e7c0, 24'hc4d5fd, 24'hbd43e4, 24'h177d78, 24'h2185be, 24'he70bfb, 24'ha046e7, 24'h85130a, 24'hf59526, 24'h9a6e84, 24'h3507bd, 24'h7bd541, 24'h1a7cc4, 24'h35af0c, 24'h2a1e58, 24'hc10549, 24'hc36f2a, 24'h6c1bf2, 24'h1c62d3, 24'h40bece, 24'hdcad7f, 24'h4b3f7a, 24'hb8762c, 24'h77f588, 24'h77cf36, 24'h7d8d44, 24'h7442db, 24'h2263e3, 24'h00ad62, 24'h3236b4, 24'h74ba9d, 24'h0c2750, 24'h16be2b, 24'hdc4234, 24'hbb9d25, 24'h08dec3, 24'hab3e3c}
++  };
++
++  cuckoo_hash #(
++    .BUCKET_SIZE                    (1024),
++    .N_FUNCTIONS                    (4),
++    .KEY_WIDTH                      (64),
++    .DATA_WIDTH                     (512),
++    .MAX_KICKS                      (4),
++    .HASH_MATRIX                    (HASH_MATRIX)
++  ) cuckoo_inst (
++    .clk                            (axis_aclk),
++    .rstn                           (mod_rstn),
++
++    .s_axis_tvalid                  (axis_cuckoo_in_tvalid),
++    .s_axis_tdata                   (axis_cuckoo_in_tdata),
++    .s_axis_tkeep                   (axis_cuckoo_in_tkeep),
++    .s_axis_tuser                   (axis_cuckoo_in_tuser),
++    .s_axis_tlast                   (axis_cuckoo_in_tlast),
++    .s_axis_tready                  (axis_cuckoo_in_tready),
++
++    .m_axis_tvalid                  (axis_cuckoo_out_tvalid),
++    .m_axis_tdata                   (axis_cuckoo_out_tdata),
++    .m_axis_tkeep                   (axis_cuckoo_out_tkeep),
++    .m_axis_tuser                   (axis_cuckoo_out_tuser),
++    .m_axis_tlast                   (axis_cuckoo_out_tlast),
++    .m_axis_tready                  (axis_cuckoo_out_tready),
++
++    .s_axis_dm_tvalid               (axis_from_dm_tvalid),
++    .s_axis_dm_tdata                (axis_from_dm_tdata),
++    .s_axis_dm_tkeep                (axis_from_dm_tkeep),
++    .s_axis_dm_tlast                (axis_from_dm_tlast),
++    .s_axis_dm_tready               (axis_from_dm_tready),
++
++    .m_axis_dm_tvalid               (axis_to_dm_tvalid),
++    .m_axis_dm_tdata                (axis_to_dm_tdata),
++    .m_axis_dm_tkeep                (axis_to_dm_tkeep),
++    .m_axis_dm_tlast                (axis_to_dm_tlast),
++    .m_axis_dm_tready               (axis_to_dm_tready),
++
++    .m_axis_dm_s2mm_cmd_tvalid      (axis_dm_s2mm_cmd_tvalid),
++    .m_axis_dm_s2mm_cmd_tdata       (axis_dm_s2mm_cmd_tdata),
++    .m_axis_dm_s2mm_cmd_tready      (axis_dm_s2mm_cmd_tready),
++
++    .m_axis_dm_mm2s_cmd_tvalid      (axis_dm_mm2s_cmd_tvalid),
++    .m_axis_dm_mm2s_cmd_tdata       (axis_dm_mm2s_cmd_tdata),
++    .m_axis_dm_mm2s_cmd_tready      (axis_dm_mm2s_cmd_tready),
++
++    .m_axi_araddr                   (axi_araddr),
++    .m_axi_arburst                  (axi_arburst),
++    .m_axi_arcache                  (axi_arcache),
++    .m_axi_arid                     (axi_arid),
++    .m_axi_arlen                    (axi_arlen),
++    .m_axi_arlock                   (axi_arlock),
++    .m_axi_arprot                   (axi_arprot),
++    .m_axi_arready                  (axi_arready),
++    .m_axi_arsize                   (axi_arsize),
++    .m_axi_arvalid                  (axi_arvalid),
++    .m_axi_awaddr                   (axi_awaddr),
++    .m_axi_awburst                  (axi_awburst),
++    .m_axi_awcache                  (axi_awcache),
++    .m_axi_awid                     (axi_awid),
++    .m_axi_awlen                    (axi_awlen),
++    .m_axi_awlock                   (axi_awlock),
++    .m_axi_awprot                   (axi_awprot),
++    .m_axi_awready                  (axi_awready),
++    .m_axi_awsize                   (axi_awsize),
++    .m_axi_awvalid                  (axi_awvalid),
++    .m_axi_bid                      (axi_bid),
++    .m_axi_bready                   (axi_bready),
++    .m_axi_bresp                    (axi_bresp),
++    .m_axi_bvalid                   (axi_bvalid),
++    .m_axi_rdata                    (axi_rdata),
++    .m_axi_rid                      (axi_rid),
++    .m_axi_rlast                    (axi_rlast),
++    .m_axi_rready                   (axi_rready),
++    .m_axi_rresp                    (axi_rresp),
++    .m_axi_rvalid                   (axi_rvalid),
++    .m_axi_wdata                    (axi_wdata),
++    .m_axi_wlast                    (axi_wlast),
++    .m_axi_wready                   (axi_wready),
++    .m_axi_wstrb                    (axi_wstrb),
++    .m_axi_wvalid                   (axi_wvalid)
++  );
++
+   qdma_hbm_bd_wrapper hbm_inst (
+-    .S00_AXI_0_araddr                    (m_axi_araddr),
+-    .S00_AXI_0_arburst                   (m_axi_arburst),
+-    .S00_AXI_0_arcache                   (m_axi_arcache),
+-    .S00_AXI_0_arid                      (m_axi_arid),
+-    .S00_AXI_0_arlen                     (m_axi_arlen),
+-    .S00_AXI_0_arlock                    (m_axi_arlock),
+-    .S00_AXI_0_arprot                    (m_axi_arprot),
+-    .S00_AXI_0_arqos                     (m_axi_arqos),
+-    .S00_AXI_0_arready                   (m_axi_arready),
+-    .S00_AXI_0_arsize                    (m_axi_arsize),
+-    .S00_AXI_0_aruser                    (m_axi_aruser),
+-    .S00_AXI_0_arvalid                   (m_axi_arvalid),
+-    .S00_AXI_0_awaddr                    (m_axi_awaddr),
+-    .S00_AXI_0_awburst                   (m_axi_awburst),
+-    .S00_AXI_0_awcache                   (m_axi_awcache),
+-    .S00_AXI_0_awid                      (m_axi_awid),
+-    .S00_AXI_0_awlen                     (m_axi_awlen),
+-    .S00_AXI_0_awlock                    (m_axi_awlock),
+-    .S00_AXI_0_awprot                    (m_axi_awprot),
+-    .S00_AXI_0_awqos                     (m_axi_awqos),
+-    .S00_AXI_0_awready                   (m_axi_awready),
+-    .S00_AXI_0_awsize                    (m_axi_awsize),
+-    .S00_AXI_0_awuser                    (m_axi_awuser),
+-    .S00_AXI_0_awvalid                   (m_axi_awvalid),
+-    .S00_AXI_0_bid                       (m_axi_bid),
+-    .S00_AXI_0_bready                    (m_axi_bready),
+-    .S00_AXI_0_bresp                     (m_axi_bresp),
+-    .S00_AXI_0_bvalid                    (m_axi_bvalid),
+-    .S00_AXI_0_rdata                     (m_axi_rdata),
+-    .S00_AXI_0_rid                       (m_axi_rid),
+-    .S00_AXI_0_rlast                     (m_axi_rlast),
+-    .S00_AXI_0_rready                    (m_axi_rready),
+-    .S00_AXI_0_rresp                     (m_axi_rresp),
+-    .S00_AXI_0_rvalid                    (m_axi_rvalid),
+-    .S00_AXI_0_wdata                     (m_axi_wdata),
+-    .S00_AXI_0_wlast                     (m_axi_wlast),
+-    .S00_AXI_0_wready                    (m_axi_wready),
+-    .S00_AXI_0_wstrb                     (m_axi_wstrb),
+-    .S00_AXI_0_wuser                     (m_axi_wuser),
+-    .S00_AXI_0_wvalid                    (m_axi_wvalid),
+-
+-    .axi_clk                             (axis_aclk),
+-    .axi_resetn                          (powerup_rstn),
+-    .hbm_ref_clk                         (hbm_ref_clk)
++    .s_axi_qdma_araddr              (m_axi_araddr),
++    .s_axi_qdma_arburst             (m_axi_arburst),
++    .s_axi_qdma_arcache             (m_axi_arcache),
++    .s_axi_qdma_arid                (m_axi_arid),
++    .s_axi_qdma_arlen               (m_axi_arlen),
++    .s_axi_qdma_arlock              (m_axi_arlock),
++    .s_axi_qdma_arprot              (m_axi_arprot),
++    .s_axi_qdma_arqos               (m_axi_arqos),
++    .s_axi_qdma_arready             (m_axi_arready),
++    .s_axi_qdma_arsize              (m_axi_arsize),
++    .s_axi_qdma_aruser              (m_axi_aruser),
++    .s_axi_qdma_arvalid             (m_axi_arvalid),
++    .s_axi_qdma_awaddr              (m_axi_awaddr),
++    .s_axi_qdma_awburst             (m_axi_awburst),
++    .s_axi_qdma_awcache             (m_axi_awcache),
++    .s_axi_qdma_awid                (m_axi_awid),
++    .s_axi_qdma_awlen               (m_axi_awlen),
++    .s_axi_qdma_awlock              (m_axi_awlock),
++    .s_axi_qdma_awprot              (m_axi_awprot),
++    .s_axi_qdma_awqos               (m_axi_awqos),
++    .s_axi_qdma_awready             (m_axi_awready),
++    .s_axi_qdma_awsize              (m_axi_awsize),
++    .s_axi_qdma_awuser              (m_axi_awuser),
++    .s_axi_qdma_awvalid             (m_axi_awvalid),
++    .s_axi_qdma_bid                 (m_axi_bid),
++    .s_axi_qdma_bready              (m_axi_bready),
++    .s_axi_qdma_bresp               (m_axi_bresp),
++    .s_axi_qdma_bvalid              (m_axi_bvalid),
++    .s_axi_qdma_rdata               (m_axi_rdata),
++    .s_axi_qdma_rid                 (m_axi_rid),
++    .s_axi_qdma_rlast               (m_axi_rlast),
++    .s_axi_qdma_rready              (m_axi_rready),
++    .s_axi_qdma_rresp               (m_axi_rresp),
++    .s_axi_qdma_rvalid              (m_axi_rvalid),
++    .s_axi_qdma_wdata               (m_axi_wdata),
++    .s_axi_qdma_wlast               (m_axi_wlast),
++    .s_axi_qdma_wready              (m_axi_wready),
++    .s_axi_qdma_wstrb               (m_axi_wstrb),
++    .s_axi_qdma_wuser               (m_axi_wuser),
++    .s_axi_qdma_wvalid              (m_axi_wvalid),
++
++    .s_axis_dm_tdata                (axis_to_dm_tdata),
++    .s_axis_dm_tkeep                (axis_to_dm_tkeep),
++    .s_axis_dm_tlast                (axis_to_dm_tlast),
++    .s_axis_dm_tready               (axis_to_dm_tready),
++    .s_axis_dm_tvalid               (axis_to_dm_tvalid),
++
++    .m_axis_dm_tdata                (axis_from_dm_tdata),
++    .m_axis_dm_tkeep                (axis_from_dm_tkeep),
++    .m_axis_dm_tlast                (axis_from_dm_tlast),
++    .m_axis_dm_tready               (axis_from_dm_tready),
++    .m_axis_dm_tvalid               (axis_from_dm_tvalid),
++
++    .s_axis_dm_mm2s_cmd_tdata       (axis_dm_mm2s_cmd_tdata),
++    .s_axis_dm_mm2s_cmd_tready      (axis_dm_mm2s_cmd_tready),
++    .s_axis_dm_mm2s_cmd_tvalid      (axis_dm_mm2s_cmd_tvalid),
++
++    .s_axis_dm_s2mm_cmd_tdata       (axis_dm_s2mm_cmd_tdata),
++    .s_axis_dm_s2mm_cmd_tready      (axis_dm_s2mm_cmd_tready),
++    .s_axis_dm_s2mm_cmd_tvalid      (axis_dm_s2mm_cmd_tvalid),
++
++    .m_axis_mm2s_sts_tdata          (axis_mm2s_sts_tdata),
++    .m_axis_mm2s_sts_tkeep          (axis_mm2s_sts_tkeep),
++    .m_axis_mm2s_sts_tlast          (axis_mm2s_sts_tlast),
++    .m_axis_mm2s_sts_tready         (axis_mm2s_sts_tready),
++    .m_axis_mm2s_sts_tvalid         (axis_mm2s_sts_tvalid),
++
++    .m_axis_s2mm_sts_tdata          (axis_s2mm_sts_tdata),
++    .m_axis_s2mm_sts_tkeep          (axis_s2mm_sts_tkeep),
++    .m_axis_s2mm_sts_tlast          (axis_s2mm_sts_tlast),
++    .m_axis_s2mm_sts_tready         (axis_s2mm_sts_tready),
++    .m_axis_s2mm_sts_tvalid         (axis_s2mm_sts_tvalid),
++
++    .s_axi_hbm_0_araddr             (axi_araddr[0]),
++    .s_axi_hbm_0_arburst            (axi_arburst[0]),
++    .s_axi_hbm_0_arid               (axi_arid[0]),
++    .s_axi_hbm_0_arlen              (axi_arlen[0]),
++    .s_axi_hbm_0_arready            (axi_arready[0]),
++    .s_axi_hbm_0_arsize             (axi_arsize[0]),
++    .s_axi_hbm_0_arvalid            (axi_arvalid[0]),
++    .s_axi_hbm_0_awaddr             (axi_awaddr[0]),
++    .s_axi_hbm_0_awburst            (axi_awburst[0]),
++    .s_axi_hbm_0_awid               (axi_awid[0]),
++    .s_axi_hbm_0_awlen              (axi_awlen[0]),
++    .s_axi_hbm_0_awready            (axi_awready[0]),
++    .s_axi_hbm_0_awsize             (axi_awsize[0]),
++    .s_axi_hbm_0_awvalid            (axi_awvalid[0]),
++    .s_axi_hbm_0_bid                (axi_bid[0]),
++    .s_axi_hbm_0_bready             (axi_bready[0]),
++    .s_axi_hbm_0_bresp              (axi_bresp[0]),
++    .s_axi_hbm_0_bvalid             (axi_bvalid[0]),
++    .s_axi_hbm_0_rdata              (axi_rdata[0]),
++    .s_axi_hbm_0_rid                (axi_rid[0]),
++    .s_axi_hbm_0_rlast              (axi_rlast[0]),
++    .s_axi_hbm_0_rready             (axi_rready[0]),
++    .s_axi_hbm_0_rresp              (axi_rresp[0]),
++    .s_axi_hbm_0_rvalid             (axi_rvalid[0]),
++    .s_axi_hbm_0_wdata              (axi_wdata[0]),
++    .s_axi_hbm_0_wlast              (axi_wlast[0]),
++    .s_axi_hbm_0_wready             (axi_wready[0]),
++    .s_axi_hbm_0_wstrb              (axi_wstrb[0]),
++    .s_axi_hbm_0_wvalid             (axi_wvalid[0]),
++
++    .s_axi_hbm_1_araddr             (axi_araddr[1]),
++    .s_axi_hbm_1_arburst            (axi_arburst[1]),
++    .s_axi_hbm_1_arid               (axi_arid[1]),
++    .s_axi_hbm_1_arlen              (axi_arlen[1]),
++    .s_axi_hbm_1_arready            (axi_arready[1]),
++    .s_axi_hbm_1_arsize             (axi_arsize[1]),
++    .s_axi_hbm_1_arvalid            (axi_arvalid[1]),
++    .s_axi_hbm_1_awaddr             (axi_awaddr[1]),
++    .s_axi_hbm_1_awburst            (axi_awburst[1]),
++    .s_axi_hbm_1_awid               (axi_awid[1]),
++    .s_axi_hbm_1_awlen              (axi_awlen[1]),
++    .s_axi_hbm_1_awready            (axi_awready[1]),
++    .s_axi_hbm_1_awsize             (axi_awsize[1]),
++    .s_axi_hbm_1_awvalid            (axi_awvalid[1]),
++    .s_axi_hbm_1_bid                (axi_bid[1]),
++    .s_axi_hbm_1_bready             (axi_bready[1]),
++    .s_axi_hbm_1_bresp              (axi_bresp[1]),
++    .s_axi_hbm_1_bvalid             (axi_bvalid[1]),
++    .s_axi_hbm_1_rdata              (axi_rdata[1]),
++    .s_axi_hbm_1_rid                (axi_rid[1]),
++    .s_axi_hbm_1_rlast              (axi_rlast[1]),
++    .s_axi_hbm_1_rready             (axi_rready[1]),
++    .s_axi_hbm_1_rresp              (axi_rresp[1]),
++    .s_axi_hbm_1_rvalid             (axi_rvalid[1]),
++    .s_axi_hbm_1_wdata              (axi_wdata[1]),
++    .s_axi_hbm_1_wlast              (axi_wlast[1]),
++    .s_axi_hbm_1_wready             (axi_wready[1]),
++    .s_axi_hbm_1_wstrb              (axi_wstrb[1]),
++    .s_axi_hbm_1_wvalid             (axi_wvalid[1]),
++
++    .s_axi_hbm_2_araddr             (axi_araddr[2]),
++    .s_axi_hbm_2_arburst            (axi_arburst[2]),
++    .s_axi_hbm_2_arid               (axi_arid[2]),
++    .s_axi_hbm_2_arlen              (axi_arlen[2]),
++    .s_axi_hbm_2_arready            (axi_arready[2]),
++    .s_axi_hbm_2_arsize             (axi_arsize[2]),
++    .s_axi_hbm_2_arvalid            (axi_arvalid[2]),
++    .s_axi_hbm_2_awaddr             (axi_awaddr[2]),
++    .s_axi_hbm_2_awburst            (axi_awburst[2]),
++    .s_axi_hbm_2_awid               (axi_awid[2]),
++    .s_axi_hbm_2_awlen              (axi_awlen[2]),
++    .s_axi_hbm_2_awready            (axi_awready[2]),
++    .s_axi_hbm_2_awsize             (axi_awsize[2]),
++    .s_axi_hbm_2_awvalid            (axi_awvalid[2]),
++    .s_axi_hbm_2_bid                (axi_bid[2]),
++    .s_axi_hbm_2_bready             (axi_bready[2]),
++    .s_axi_hbm_2_bresp              (axi_bresp[2]),
++    .s_axi_hbm_2_bvalid             (axi_bvalid[2]),
++    .s_axi_hbm_2_rdata              (axi_rdata[2]),
++    .s_axi_hbm_2_rid                (axi_rid[2]),
++    .s_axi_hbm_2_rlast              (axi_rlast[2]),
++    .s_axi_hbm_2_rready             (axi_rready[2]),
++    .s_axi_hbm_2_rresp              (axi_rresp[2]),
++    .s_axi_hbm_2_rvalid             (axi_rvalid[2]),
++    .s_axi_hbm_2_wdata              (axi_wdata[2]),
++    .s_axi_hbm_2_wlast              (axi_wlast[2]),
++    .s_axi_hbm_2_wready             (axi_wready[2]),
++    .s_axi_hbm_2_wstrb              (axi_wstrb[2]),
++    .s_axi_hbm_2_wvalid             (axi_wvalid[2]),
++
++    .s_axi_hbm_3_araddr             (axi_araddr[3]),
++    .s_axi_hbm_3_arburst            (axi_arburst[3]),
++    .s_axi_hbm_3_arid               (axi_arid[3]),
++    .s_axi_hbm_3_arlen              (axi_arlen[3]),
++    .s_axi_hbm_3_arready            (axi_arready[3]),
++    .s_axi_hbm_3_arsize             (axi_arsize[3]),
++    .s_axi_hbm_3_arvalid            (axi_arvalid[3]),
++    .s_axi_hbm_3_awaddr             (axi_awaddr[3]),
++    .s_axi_hbm_3_awburst            (axi_awburst[3]),
++    .s_axi_hbm_3_awid               (axi_awid[3]),
++    .s_axi_hbm_3_awlen              (axi_awlen[3]),
++    .s_axi_hbm_3_awready            (axi_awready[3]),
++    .s_axi_hbm_3_awsize             (axi_awsize[3]),
++    .s_axi_hbm_3_awvalid            (axi_awvalid[3]),
++    .s_axi_hbm_3_bid                (axi_bid[3]),
++    .s_axi_hbm_3_bready             (axi_bready[3]),
++    .s_axi_hbm_3_bresp              (axi_bresp[3]),
++    .s_axi_hbm_3_bvalid             (axi_bvalid[3]),
++    .s_axi_hbm_3_rdata              (axi_rdata[3]),
++    .s_axi_hbm_3_rid                (axi_rid[3]),
++    .s_axi_hbm_3_rlast              (axi_rlast[3]),
++    .s_axi_hbm_3_rready             (axi_rready[3]),
++    .s_axi_hbm_3_rresp              (axi_rresp[3]),
++    .s_axi_hbm_3_rvalid             (axi_rvalid[3]),
++    .s_axi_hbm_3_wdata              (axi_wdata[3]),
++    .s_axi_hbm_3_wlast              (axi_wlast[3]),
++    .s_axi_hbm_3_wready             (axi_wready[3]),
++    .s_axi_hbm_3_wstrb              (axi_wstrb[3]),
++    .s_axi_hbm_3_wvalid             (axi_wvalid[3]),
++
++    .axi_clk                        (axis_aclk),
++    .axi_resetn                     (powerup_rstn),
++    .hbm_ref_clk                    (hbm_ref_clk)
+   );
+ 
+   qdma_subsystem_qdma_wrapper #(
+diff --git a/src/utility/cuckoo_hash.sv b/src/utility/cuckoo_hash.sv
+new file mode 100644
+index 0000000..7ca01dd
+--- /dev/null
++++ b/src/utility/cuckoo_hash.sv
+@@ -0,0 +1,596 @@
++module cuckoo_hash # (
++  parameter  int BUCKET_SIZE = 1024,
++  parameter  int N_FUNCTIONS = 4,
++  parameter  int MAX_KICKS   = 4,
++  parameter  int KEY_WIDTH   = 64,
++  parameter  int DATA_WIDTH  = 512,
++  localparam int KEEP_WIDTH  = DATA_WIDTH / 8,
++  localparam int HASH_WIDTH  = 34 - $clog2(BUCKET_SIZE),
++  localparam int CMD_WIDTH   = 80,
++  parameter logic [HASH_WIDTH-1:0] HASH_MATRIX [N_FUNCTIONS][KEY_WIDTH-1:0] = '{default: '0}
++) (
++  input  logic clk,
++  input  logic rstn,
++
++  input  logic                  s_axis_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
++  input  logic                  s_axis_tuser,
++  input  logic                  s_axis_tlast,
++  output logic                  s_axis_tready,
++
++  output logic                  m_axis_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
++  output logic                  m_axis_tuser,
++  output logic                  m_axis_tlast,
++  input  logic                  m_axis_tready,
++
++  input  logic                  s_axis_dm_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_dm_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_dm_tkeep,
++  input  logic                  s_axis_dm_tlast,
++  output logic                  s_axis_dm_tready,
++
++  output logic                  m_axis_dm_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_dm_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_dm_tkeep,
++  output logic                  m_axis_dm_tlast,
++  input  logic                  m_axis_dm_tready,
++
++  output logic                  m_axis_dm_mm2s_cmd_tvalid,
++  output logic  [CMD_WIDTH-1:0] m_axis_dm_mm2s_cmd_tdata,
++  input  logic                  m_axis_dm_mm2s_cmd_tready,
++
++  output logic                  m_axis_dm_s2mm_cmd_tvalid,
++  output logic  [CMD_WIDTH-1:0] m_axis_dm_s2mm_cmd_tdata,
++  input  logic                  m_axis_dm_s2mm_cmd_tready,
++
++  output logic           [33:0] m_axi_araddr   [N_FUNCTIONS],
++  output logic            [1:0] m_axi_arburst  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_arcache  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_arid     [N_FUNCTIONS],
++  output logic            [3:0] m_axi_arlen    [N_FUNCTIONS],
++  output logic            [1:0] m_axi_arlock   [N_FUNCTIONS],
++  output logic            [2:0] m_axi_arprot   [N_FUNCTIONS],
++  input  logic                  m_axi_arready  [N_FUNCTIONS],
++  output logic            [2:0] m_axi_arsize   [N_FUNCTIONS],
++  output logic                  m_axi_arvalid  [N_FUNCTIONS],
++  output logic           [33:0] m_axi_awaddr   [N_FUNCTIONS],
++  output logic            [1:0] m_axi_awburst  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_awcache  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_awid     [N_FUNCTIONS],
++  output logic            [3:0] m_axi_awlen    [N_FUNCTIONS],
++  output logic            [1:0] m_axi_awlock   [N_FUNCTIONS],
++  output logic            [2:0] m_axi_awprot   [N_FUNCTIONS],
++  input  logic                  m_axi_awready  [N_FUNCTIONS],
++  output logic            [2:0] m_axi_awsize   [N_FUNCTIONS],
++  output logic                  m_axi_awvalid  [N_FUNCTIONS],
++  input  logic            [3:0] m_axi_bid      [N_FUNCTIONS],
++  output logic                  m_axi_bready   [N_FUNCTIONS],
++  input  logic            [1:0] m_axi_bresp    [N_FUNCTIONS],
++  input  logic                  m_axi_bvalid   [N_FUNCTIONS],
++  input  logic          [255:0] m_axi_rdata    [N_FUNCTIONS],
++  input  logic            [3:0] m_axi_rid      [N_FUNCTIONS],
++  input  logic                  m_axi_rlast    [N_FUNCTIONS],
++  output logic                  m_axi_rready   [N_FUNCTIONS],
++  input  logic            [1:0] m_axi_rresp    [N_FUNCTIONS],
++  input  logic                  m_axi_rvalid   [N_FUNCTIONS],
++  output logic          [255:0] m_axi_wdata    [N_FUNCTIONS],
++  output logic                  m_axi_wlast    [N_FUNCTIONS],
++  input  logic                  m_axi_wready   [N_FUNCTIONS],
++  output logic           [31:0] m_axi_wstrb    [N_FUNCTIONS],
++  output logic                  m_axi_wvalid   [N_FUNCTIONS]
++);
++  localparam int FIFO_DEPTH       = 2 * BUCKET_SIZE * 8 / DATA_WIDTH;
++  localparam int ADDRESS_SHIFT    = $clog2(BUCKET_SIZE);
++  localparam int HASH_COUNT_WIDTH = $clog2(N_FUNCTIONS);
++  localparam int KICK_COUNT_WIDTH = $clog2(MAX_KICKS);
++  localparam logic [22:0] DM_BTT  = BUCKET_SIZE;
++
++  logic                  axis_buffer_in_tvalid;
++  logic [DATA_WIDTH-1:0] axis_buffer_in_tdata;
++  logic [KEEP_WIDTH-1:0] axis_buffer_in_tkeep;
++  logic                  axis_buffer_in_tlast;
++  logic                  axis_buffer_in_tready;
++
++  logic                  axis_buffer_out_tvalid;
++  logic [DATA_WIDTH-1:0] axis_buffer_out_tdata;
++  logic [KEEP_WIDTH-1:0] axis_buffer_out_tkeep;
++  logic                  axis_buffer_out_tlast;
++  logic                  axis_buffer_out_tready;
++
++  xpm_fifo_axis #(
++    .FIFO_DEPTH               (FIFO_DEPTH),
++    .TDATA_WIDTH              (DATA_WIDTH)
++  ) xpm_fifo_axis_inst (
++    .m_axis_tvalid            (axis_buffer_out_tvalid),
++    .m_axis_tready            (axis_buffer_out_tready),
++    .m_axis_tdata             (axis_buffer_out_tdata),
++    .m_axis_tkeep             (axis_buffer_out_tkeep),
++    .m_axis_tdest             (),
++    .m_axis_tid               (),
++    .m_axis_tstrb             (),
++    .m_axis_tuser             (),
++    .m_axis_tlast             (axis_buffer_out_tlast),
++
++    .s_axis_tvalid            (axis_buffer_in_tvalid),
++    .s_axis_tready            (axis_buffer_in_tready),
++    .s_axis_tdata             (axis_buffer_in_tdata),
++    .s_axis_tkeep             (axis_buffer_in_tkeep),
++    .s_axis_tdest             (1'b0),
++    .s_axis_tid               (1'b0),
++    .s_axis_tstrb             ('0),
++    .s_axis_tuser             (1'b0),
++    .s_axis_tlast             (axis_buffer_in_tlast),
++
++    .injectsbiterr_axis       (1'b0),
++    .injectdbiterr_axis       (1'b0),
++    .m_aclk                   (clk),
++    .s_aclk                   (clk),
++    .s_aresetn                (rstn)
++  );
++
++  typedef enum logic [2:0] {IDLE, CHECK_READ, CHECK_WRITE, READ, WRITE, SWAP, RECHECK, ERROR} state_e;
++  typedef enum logic [2:0] {BUF_IN_IDLE, BUF_IN_FILL, BUF_IN_FILL_FROM_DM, BUF_IN_DONE} buf_in_state_e;
++  typedef enum logic [2:0] {BUF_OUT_IDLE, BUF_OUT_EMPTY, BUF_OUT_EMPTY_READ_CMD, BUF_OUT_EMPTY_TO_DM, BUF_OUT_DONE} buf_out_state_e;
++  typedef enum logic [2:0] {DM_IDLE, DM_CMD_READ, DM_READ, DM_CMD_WRITE, DM_WRITE, DM_DONE} dm_state_e;
++  typedef enum logic [2:0] {HBM_READ_IDLE, HBM_READ_ADDRESS, HBM_READ, HBM_READ_DONE} hbm_read_state_e;
++  typedef enum logic [2:0] {HBM_WRITE_IDLE, HBM_WRITE_ADDRESS, HBM_WRITE, HBM_WRITE_DONE} hbm_write_state_e;
++
++  state_e                       state,                            state_next;
++  buf_in_state_e                buf_in_state,                     buf_in_state_next;
++  buf_out_state_e               buf_out_state,                    buf_out_state_next;
++  dm_state_e                    dm_state,                         dm_state_next;
++  hbm_read_state_e              hbm_read_state [N_FUNCTIONS],     hbm_read_state_next [N_FUNCTIONS];
++  hbm_write_state_e             hbm_write_state [N_FUNCTIONS],    hbm_write_state_next [N_FUNCTIONS];
++  logic                         stored_dirty [N_FUNCTIONS],       stored_dirty_next [N_FUNCTIONS];
++  logic         [KEY_WIDTH-1:0] stored_keys [N_FUNCTIONS],        stored_keys_next [N_FUNCTIONS];
++  logic        [HASH_WIDTH-1:0] current_addresses [N_FUNCTIONS],  current_addresses_next [N_FUNCTIONS];
++  logic         [KEY_WIDTH-1:0] current_key,                      current_key_next;
++  logic        [HASH_WIDTH-1:0] address,                          address_next;
++  logic  [KICK_COUNT_WIDTH-1:0] kick_count,                       kick_count_next;
++
++  logic start_hbm_read;
++  logic start_hbm_write;
++  logic start_dm_read;
++  logic start_dm_write;
++  logic start_dm_swap;
++  logic start_buf_in;
++  logic start_buf_in_from_dm;
++  logic start_buf_out;
++  logic start_buf_out_read_cmd;
++  logic start_buf_out_to_dm;
++  logic stop_hbm_read;
++  logic stop_hbm_write;
++  logic stop_dm;
++  logic stop_buf_in;
++  logic stop_buf_out;
++
++  function automatic logic [HASH_WIDTH-1:0] hash (
++    input logic  [KEY_WIDTH-1:0] key,
++    input logic [HASH_WIDTH-1:0] matrix [KEY_WIDTH-1:0]
++  );
++    logic [HASH_WIDTH-1:0] accumulator = '0;
++    for (int i = 0; i < KEY_WIDTH; i = i + 1)
++        if (key[i])
++            accumulator ^= matrix[i];
++    return accumulator;
++  endfunction
++
++  function automatic logic hbm_read_done (
++    input hbm_read_state_e state [N_FUNCTIONS]
++  );
++    for (int i = 0; i < N_FUNCTIONS; i++)
++      if (state[i] != HBM_READ_DONE)
++        return 1'b0;
++    return 1'b1;
++  endfunction
++
++  function automatic logic hbm_write_done (
++    input hbm_write_state_e state [N_FUNCTIONS]
++  );
++    for (int i = 0; i < N_FUNCTIONS; i++)
++      if (state[i] != HBM_WRITE_DONE)
++        return 1'b0;
++    return 1'b1;
++  endfunction
++
++  function automatic logic no_collisions (
++    input  logic                  read,
++    input  logic                  stored_dirty [N_FUNCTIONS],
++    input  logic  [KEY_WIDTH-1:0] stored_keys [N_FUNCTIONS],
++    input  logic [HASH_WIDTH-1:0] current_addresses [N_FUNCTIONS],
++    input  logic  [KEY_WIDTH-1:0] current_key,
++    output logic [HASH_WIDTH-1:0] address
++  );
++    logic read_possible;
++    logic write_possible;
++    for (int i = 0; i < N_FUNCTIONS; i++) begin
++      read_possible = stored_dirty[i] && stored_keys[i] == current_key;
++      write_possible = !stored_dirty[i] || stored_keys[i] == current_key;
++      if (read && read_possible || !read && write_possible) begin
++        address = current_addresses[i];
++        return 1'b1;
++      end
++    end
++    address = '0;
++    return 1'b0;
++  endfunction
++
++  always_ff @(posedge clk) begin
++    if (!rstn) begin
++      state         <= IDLE;
++      buf_in_state  <= BUF_IN_IDLE;
++      buf_out_state <= BUF_OUT_IDLE;
++      dm_state      <= DM_IDLE;
++      current_key   <= '0;
++      address       <= '0;
++      kick_count    <= '0;
++      for (int i = 0; i < N_FUNCTIONS; i++) begin
++        hbm_read_state[i]     <= HBM_READ_IDLE;
++        hbm_write_state[i]    <= HBM_WRITE_IDLE;
++        stored_dirty[i]       <= '0;
++        stored_keys[i]        <= '0;
++        current_addresses[i]  <= '0;
++      end
++    end
++    else begin
++      state         <= state_next;
++      buf_in_state  <= buf_in_state_next;
++      buf_out_state <= buf_out_state_next;
++      dm_state      <= dm_state_next;
++      current_key   <= current_key_next;
++      address       <= address_next;
++      kick_count    <= kick_count_next;
++      for (int i = 0; i < N_FUNCTIONS; i++) begin
++        hbm_read_state[i]     <= hbm_read_state_next[i];
++        hbm_write_state[i]    <= hbm_write_state_next[i];
++        stored_dirty[i]       <= stored_dirty_next[i];
++        stored_keys[i]        <= stored_keys_next[i];
++        current_addresses[i]  <= current_addresses_next[i];
++      end
++    end
++  end
++
++  // Main state machine
++  always_comb begin
++    start_hbm_read          = 1'b0;
++    start_hbm_write         = 1'b0;
++    start_dm_read           = 1'b0;
++    start_dm_write          = 1'b0;
++    start_dm_swap           = 1'b0;
++    start_buf_in            = 1'b0;
++    start_buf_out           = 1'b0;
++    start_buf_out_read_cmd  = 1'b0;
++    stop_hbm_read           = 1'b0;
++    stop_hbm_write          = 1'b0;
++    stop_dm                 = 1'b0;
++    stop_buf_in             = 1'b0;
++    stop_buf_out            = 1'b0;
++    state_next              = state;
++    current_key_next        = current_key;
++    current_addresses_next  = current_addresses;
++    address_next            = address;
++    kick_count_next         = kick_count;
++    for (int i = 0; i < N_FUNCTIONS; i++)
++      current_addresses_next[i] = current_addresses_next[i];
++    case (state)
++      IDLE: begin
++        start_buf_in   = 1'b1;
++        stop_buf_out   = 1'b1;
++        stop_hbm_read  = 1'b1;
++        stop_hbm_write = 1'b1;
++        stop_dm        = 1'b1;
++        if (s_axis_tvalid) begin
++          if (s_axis_tuser)
++            state_next = CHECK_READ;
++          else
++            state_next = CHECK_WRITE;
++          current_key_next  = s_axis_tdata[DATA_WIDTH-1-:KEY_WIDTH];
++          for (int i = 0; i < N_FUNCTIONS; i++)
++            current_addresses_next[i] = hash(current_key_next, HASH_MATRIX[i]);
++        end
++      end
++      CHECK_READ: begin
++        stop_buf_in            = 1'b1;
++        start_buf_out_read_cmd = 1'b1;
++        start_hbm_read         = 1'b1;
++        if (hbm_read_done(hbm_read_state) && buf_out_state == BUF_OUT_DONE) begin
++          stop_buf_out = 1'b1;
++          if (no_collisions(1'b1, stored_dirty, stored_keys, current_addresses, current_key, address_next))
++            state_next = READ;
++          else
++            state_next = ERROR;
++        end
++      end
++      CHECK_WRITE: begin
++        start_hbm_read = 1'b1;
++        if (hbm_read_done(hbm_read_state) && buf_in_state == BUF_IN_DONE)
++          if (no_collisions(1'b0, stored_dirty, stored_keys, current_addresses, current_key, address_next))
++            state_next = WRITE;
++          else
++            state_next = SWAP;
++      end
++      READ: begin
++        stop_hbm_read         = 1'b1;
++        stop_buf_in           = 1'b1;
++        start_buf_out         = 1'b1;
++        start_dm_read         = 1'b1;
++        if (dm_state == DM_DONE)
++          state_next = IDLE;
++      end
++      WRITE: begin
++        stop_hbm_read         = 1'b1;
++        stop_buf_in           = 1'b1;
++        start_dm_write        = 1'b1;
++        start_hbm_write       = 1'b1;
++        if (dm_state == DM_DONE && hbm_write_done(hbm_write_state))
++          state_next = IDLE;
++      end
++      SWAP: begin
++        stop_hbm_read         = 1'b1;
++        stop_buf_in           = 1'b1;
++        start_dm_swap         = 1'b1;
++        if (dm_state == DM_DONE) begin
++          state_next       = RECHECK;
++          kick_count_next  = kick_count + 1;
++          current_key_next = stored_keys[kick_count[HASH_COUNT_WIDTH-1:0]];
++          for (int i = 0; i < N_FUNCTIONS; i++)
++            current_addresses_next[i] = hash(current_key_next, HASH_MATRIX[i]);
++        end
++      end
++      RECHECK: begin
++        stop_dm        = 1'b1;
++        stop_buf_in    = 1'b1;
++        stop_buf_out   = 1'b1;
++        start_hbm_read = 1'b1;
++        if (hbm_read_done(hbm_read_state))
++          if (no_collisions(1'b0, stored_dirty, stored_keys, current_addresses, current_key, address_next))
++            state_next = WRITE;
++          else
++            if (kick_count == MAX_KICKS - 1)
++              state_next = ERROR;
++            else
++              state_next = SWAP;
++      end
++      ERROR: begin
++        state_next = IDLE;
++      end
++    endcase
++  end
++
++  // Buffer state machine
++  always_comb begin
++    buf_in_state_next      = buf_in_state;
++    buf_out_state_next     = buf_out_state;
++    axis_buffer_in_tvalid  = 1'b0;
++    axis_buffer_in_tdata   =   '0;
++    axis_buffer_in_tkeep   =   '0;
++    axis_buffer_in_tlast   = 1'b0;
++    axis_buffer_out_tready = 1'b0;
++    m_axis_tvalid          = 1'b0;
++    m_axis_tdata           =   '0;
++    m_axis_tkeep           =   '0;
++    m_axis_tuser           = 1'b0;
++    m_axis_tlast           = 1'b0;
++    s_axis_tready          = 1'b0;
++    m_axis_dm_tvalid       = 1'b0;
++    m_axis_dm_tdata        =   '0;
++    m_axis_dm_tkeep        =   '0;
++    m_axis_dm_tlast        = 1'b0;
++    s_axis_dm_tready       = 1'b0;
++    case (buf_in_state)
++      BUF_IN_IDLE: begin
++        if (start_buf_in)
++          buf_in_state_next = BUF_IN_FILL;
++        if (start_buf_in_from_dm)
++          buf_in_state_next = BUF_IN_FILL_FROM_DM;
++      end
++      BUF_IN_FILL: begin
++        axis_buffer_in_tvalid = s_axis_tvalid;
++        axis_buffer_in_tdata  = s_axis_tdata;
++        axis_buffer_in_tkeep  = s_axis_tkeep;
++        axis_buffer_in_tlast  = s_axis_tlast;
++        s_axis_tready         = axis_buffer_in_tready;
++        if (s_axis_tlast && s_axis_tvalid && s_axis_tready)
++          buf_in_state_next = BUF_IN_DONE;
++      end
++      BUF_IN_FILL_FROM_DM: begin
++        axis_buffer_in_tvalid = s_axis_dm_tvalid;
++        axis_buffer_in_tdata  = {<< 8 {axis_buffer_out_tdata}};
++        axis_buffer_in_tkeep  = s_axis_dm_tkeep;
++        axis_buffer_in_tlast  = s_axis_dm_tlast;
++        s_axis_dm_tready      = axis_buffer_in_tready;
++        if (s_axis_dm_tlast && s_axis_dm_tvalid && s_axis_dm_tready)
++          buf_in_state_next = BUF_IN_DONE;
++      end
++      BUF_IN_DONE: begin
++        if (stop_buf_in)
++          buf_in_state_next = BUF_IN_IDLE;
++      end
++    endcase
++    case (buf_out_state)
++      BUF_OUT_IDLE: begin
++        if (start_buf_out)
++          buf_out_state_next = BUF_OUT_EMPTY;
++        if (start_buf_out_read_cmd)
++          buf_out_state_next = BUF_OUT_EMPTY_READ_CMD;
++        if (start_buf_out_to_dm)
++          buf_out_state_next = BUF_OUT_EMPTY_TO_DM;
++      end
++      BUF_OUT_EMPTY: begin
++        m_axis_tvalid           = axis_buffer_out_tvalid;
++        m_axis_tdata            = axis_buffer_out_tdata;
++        m_axis_tkeep            = axis_buffer_out_tkeep;
++        m_axis_tlast            = axis_buffer_out_tlast;
++        axis_buffer_out_tready  = m_axis_tready;
++        if (axis_buffer_out_tlast && axis_buffer_out_tvalid && axis_buffer_out_tready)
++          buf_out_state_next = BUF_OUT_DONE;
++      end
++      // Used to remove the read request packet from the buffer
++      BUF_OUT_EMPTY_READ_CMD: begin
++        axis_buffer_out_tready  = 1'b1;
++        if (axis_buffer_out_tlast && axis_buffer_out_tvalid && axis_buffer_out_tready)
++          buf_out_state_next = BUF_OUT_DONE;
++      end
++      BUF_OUT_EMPTY_TO_DM: begin
++        m_axis_dm_tvalid        = axis_buffer_out_tvalid;
++        m_axis_dm_tdata         = {<< 8 {axis_buffer_out_tdata}};
++        m_axis_dm_tkeep         = axis_buffer_out_tkeep;
++        m_axis_dm_tlast         = axis_buffer_out_tlast;
++        axis_buffer_out_tready  = m_axis_dm_tready;
++        if (axis_buffer_out_tlast && axis_buffer_out_tvalid && axis_buffer_out_tready)
++          buf_out_state_next = BUF_OUT_DONE;
++      end
++      BUF_OUT_DONE: begin
++        if (stop_buf_out)
++          buf_out_state_next = BUF_OUT_IDLE;
++      end
++    endcase
++  end
++
++  // Datamover state machine
++  always_comb begin
++    dm_state_next             = dm_state;
++    start_buf_in_from_dm      = 1'b0;
++    start_buf_out_to_dm       = 1'b0;
++    m_axis_dm_s2mm_cmd_tvalid = 1'b0;
++    m_axis_dm_s2mm_cmd_tdata  =   '0;
++    m_axis_dm_mm2s_cmd_tvalid = 1'b0;
++    m_axis_dm_mm2s_cmd_tdata  =   '0;
++    case (dm_state)
++      DM_IDLE: begin
++        if (start_dm_read || start_dm_swap)
++          dm_state_next = DM_CMD_READ;
++        else if (start_dm_write)
++          dm_state_next = DM_CMD_WRITE;
++      end
++      DM_CMD_READ: begin
++        start_buf_in_from_dm = 1'b1;
++        m_axis_dm_mm2s_cmd_tdata  = {8'b0, 6'b0, address, 10'b0, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
++        m_axis_dm_mm2s_cmd_tvalid = 1'b1;
++        if (m_axis_dm_mm2s_cmd_tready)
++          if (start_dm_swap)
++            dm_state_next = DM_CMD_WRITE;
++          else
++            dm_state_next = DM_READ;
++      end
++      DM_READ: begin
++        if (buf_out_state == BUF_OUT_DONE)
++          dm_state_next = DM_DONE;
++      end
++      DM_CMD_WRITE: begin
++        start_buf_out_to_dm = 1'b1;
++        // Jump dirty byte word
++        m_axis_dm_s2mm_cmd_tdata  = {8'b0, 6'b0, address, 10'h4, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
++        m_axis_dm_s2mm_cmd_tvalid = 1'b1;
++        if (m_axis_dm_s2mm_cmd_tready)
++          dm_state_next = DM_WRITE;
++      end
++      DM_WRITE: begin
++        if (buf_out_state == BUF_OUT_DONE)
++          if (start_dm_swap)
++            dm_state_next = DM_READ;
++          else
++            dm_state_next = DM_DONE;
++      end
++      DM_DONE: begin
++        if (stop_dm)
++          dm_state_next = DM_IDLE;
++      end
++    endcase
++  end
++
++  // HBM state machine
++  genvar i;
++  generate
++    for (i = 0; i < N_FUNCTIONS; i++) begin
++      always_comb begin
++        hbm_read_state_next[i]  = hbm_read_state[i];
++        hbm_write_state_next[i] = hbm_write_state[i];
++        stored_dirty_next[i]    = stored_dirty[i];
++        stored_keys_next[i]     = stored_keys[i];
++        m_axi_araddr[i]         =  64'b0;
++        m_axi_arburst[i]        =   2'b1;    // Incrementing burst
++        m_axi_arcache[i]        =   4'b0;    // Non-bufferable non-cacheable
++        m_axi_arprot[i]         =   3'b0;    // Unpriviliged secure data
++        m_axi_arid[i]           =   4'b0;
++        m_axi_arlen[i]          =   4'b0;    // 1 beat transfer
++        m_axi_arlock[i]         =   2'b0;    // Normal accesses
++        m_axi_arsize[i]         =   3'b100;  // 16 bytes transfer
++        m_axi_arvalid[i]        =   1'b0;
++        m_axi_awaddr[i]         =  64'b0;
++        m_axi_awburst[i]        =   2'b1;    // Incrementing burst
++        m_axi_awcache[i]        =   4'b0;    // Non-bufferable non-cacheable
++        m_axi_awprot[i]         =   3'b0;    // Unpriviliged secure data
++        m_axi_awid[i]           =   4'b0;
++        m_axi_awlen[i]          =   4'b0;    // 1 beat transfer
++        m_axi_awlock[i]         =   2'b0;    // Normal accesses
++        m_axi_awsize[i]         =   3'b010;  // 4 bytes transfer
++        m_axi_awvalid[i]        =   1'b0;
++        m_axi_bready[i]         =   1'b1;
++        m_axi_rready[i]         =   1'b0;
++        m_axi_wdata[i]          = 256'b0;
++        m_axi_wlast[i]          =   1'b1;
++        m_axi_wstrb[i]          =  32'b1;
++        m_axi_wvalid[i]         =   1'b0;
++        case (hbm_read_state[i])
++          HBM_READ_IDLE: begin
++            if (start_hbm_read)
++              hbm_read_state_next[i] = HBM_READ_ADDRESS;
++          end
++          HBM_READ_ADDRESS: begin
++            m_axi_araddr[i]   = current_addresses[i] << ADDRESS_SHIFT;
++            m_axi_arvalid[i]  = 1'b1;
++            if (m_axi_arready[i])
++              hbm_read_state_next[i] = HBM_READ;
++          end
++          HBM_READ: begin
++            m_axi_rready[i]   = 1'b1;
++            if (m_axi_rvalid[i]) begin
++              hbm_read_state_next[i]  = HBM_READ_DONE;
++              stored_dirty_next[i]    = m_axi_rdata[i][0];
++              stored_keys_next[i]     = {<< 8 {m_axi_rdata[i][31+KEY_WIDTH-:KEY_WIDTH]}};
++            end
++          end
++          HBM_READ_DONE: begin
++            if (stop_hbm_read)
++              hbm_read_state_next[i] = HBM_READ_IDLE;
++          end
++        endcase
++        case (hbm_write_state[i])
++          // We only intend to write the dirty byte to the correct address
++          HBM_WRITE_IDLE: begin
++            if (start_hbm_write)
++              if (address == current_addresses[i])
++                hbm_write_state_next[i] = HBM_WRITE_ADDRESS;
++              else
++                hbm_write_state_next[i] = HBM_WRITE_DONE;
++          end
++          HBM_WRITE_ADDRESS: begin
++            m_axi_awaddr[i]   = current_addresses[i] << ADDRESS_SHIFT;
++            m_axi_awvalid[i]  = 1'b1;
++            m_axi_wdata[i][0] = 1'b1;
++            m_axi_wvalid[i]   = 1'b1;
++            if (m_axi_awready[i]) begin
++              hbm_write_state_next[i] = HBM_WRITE;
++              if (m_axi_wready[i])
++                hbm_write_state_next[i] = HBM_WRITE_DONE;
++            end
++          end
++          HBM_WRITE: begin
++            m_axi_wdata[i][0] = 1'b1;
++            m_axi_wvalid[i]   = 1'b1;
++            if (m_axi_wready[i])
++              hbm_write_state_next[i] = HBM_WRITE_DONE;
++          end
++          HBM_WRITE_DONE: begin
++            if (stop_hbm_write)
++              hbm_write_state_next[i] = HBM_WRITE_IDLE;
++          end
++        endcase
++      end
++    end
++  endgenerate
++endmodule
+-- 
+2.34.1
+

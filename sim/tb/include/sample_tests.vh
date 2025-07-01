@@ -49,7 +49,7 @@
 //
 //-----------------------------------------------------------------------------
 //
-// Project    : PCI Express DMA 
+// Project    : PCI Express DMA
 // File       : sample_tests.vh
 // Version    : 5.0
 //-----------------------------------------------------------------------------
@@ -62,7 +62,7 @@
 //   board.RP.tx_usrapp.qid = 11'h0;
 //   board.RP.tx_usrapp.TSK_QDMA_MM_H2C_TEST(board.RP.tx_usrapp.qid, 0, 0);
 //   #1000;
-//   board.RP.tx_usrapp.TSK_USR_IRQ_TEST;   
+//   board.RP.tx_usrapp.TSK_USR_IRQ_TEST;
 //
 //end
 else if(board.RP.tx_usrapp.testname =="qdma_mm_test0")
@@ -90,6 +90,12 @@ begin
 //     $display ("ERROR: TEST FAILED \n");
 //   #1000;
 //   $finish;
+end
+else if(board.RP.tx_usrapp.testname == "qdma_cuckoo_test0")
+begin
+  board.RP.tx_usrapp.qid = 11'h0;
+  board.RP.tx_usrapp.TSK_QDMA_ST_C2H_TEST(board.RP.tx_usrapp.qid, 0);
+  $display("\n\nCOMPLETED CUCKOO TEST\n\n");
 end
 //else if(board.RP.tx_usrapp.testname == "qdma_st_c2h_simbyp_test0")
 //begin
@@ -163,7 +169,7 @@ end
 //   board.RP.tx_usrapp.TSK_QDMA_MM_C2H_TEST(board.RP.tx_usrapp.qid, 0, 0);
 //   #1000;
 //   board.RP.tx_usrapp.TSK_REG_WRITE(board.RP.tx_usrapp.user_bar,32'h98, 32'h640001, 4'hF);
-//   #30000000  
+//   #30000000
 //   board.RP.tx_usrapp.TSK_QDMA_MM_H2C_TEST(board.RP.tx_usrapp.qid, 0, 0);
 //   board.RP.tx_usrapp.TSK_QDMA_MM_C2H_TEST(board.RP.tx_usrapp.qid, 0, 0);
 //    if (board.RP.tx_usrapp.test_state == 1 )
@@ -186,9 +192,9 @@ end
 //
 //
 //
-//    
-//    $display("[%t] : Expected Device/Vendor ID = %x", $realtime, board.RP.tx_usrapp.DEV_VEN_ID); 
-//    
+//
+//    $display("[%t] : Expected Device/Vendor ID = %x", $realtime, board.RP.tx_usrapp.DEV_VEN_ID);
+//
 //    //--------------------------------------------------------------------------
 //    // Read core configuration space via PCIe fabric interface
 //    //--------------------------------------------------------------------------
@@ -198,7 +204,7 @@ end
 //    board.RP.tx_usrapp.TSK_TX_TYPE0_CONFIGURATION_READ(board.RP.tx_usrapp.DEFAULT_TAG, 12'h0, 4'hF);
 //    board.RP.tx_usrapp.TSK_WAIT_FOR_READ_DATA;
 //    if  (board.RP.tx_usrapp.P_READ_DATA != board.RP.tx_usrapp.DEV_VEN_ID) begin
-//        $display("ERROR: [%t] : TEST FAILED --- Data Error Mismatch, Write Data %x != Read Data %x", $realtime, 
+//        $display("ERROR: [%t] : TEST FAILED --- Data Error Mismatch, Write Data %x != Read Data %x", $realtime,
 //                                    board.RP.tx_usrapp.DEV_VEN_ID, board.RP.tx_usrapp.P_READ_DATA);
 //    end
 //    else begin
@@ -214,7 +220,7 @@ end
 //    board.RP.cfg_usrapp.TSK_READ_CFG_DW(32'h00000001);
 //    board.RP.cfg_usrapp.TSK_WRITE_CFG_DW(32'h00000001, 32'h00000007, 4'b0001);
 //    board.RP.cfg_usrapp.TSK_READ_CFG_DW(32'h00000001);
-//    
+//
 //     if (board.RP.tx_usrapp.test_state == 1 )
 //     $display ("ERROR: TEST FAILED \n");
 //
@@ -250,9 +256,9 @@ end
 //    // List Rx TLP expections
 //    //---------------------------------------------------------------------------
 //  begin
-//    board.RP.tx_usrapp.test_vars[0] = 0;                                                                                                                         
-//                                          
-//    $display("[%t] : Expected Device/Vendor ID = %x", $realtime, board.RP.tx_usrapp.DEV_VEN_ID);                                              
+//    board.RP.tx_usrapp.test_vars[0] = 0;
+//
+//    $display("[%t] : Expected Device/Vendor ID = %x", $realtime, board.RP.tx_usrapp.DEV_VEN_ID);
 //
 //    board.RP.tx_usrapp.expect_cpld_payload[0] = board.RP.tx_usrapp.DEV_VEN_ID[31:24];
 //    board.RP.tx_usrapp.expect_cpld_payload[1] = board.RP.tx_usrapp.DEV_VEN_ID[23:16];
@@ -277,11 +283,11 @@ end
 //      board.RP.tx_usrapp.expect_status //expect_status;
 //    );
 //
-//    if (board.RP.tx_usrapp.expect_status) 
-//      board.RP.tx_usrapp.test_vars[0] = board.RP.tx_usrapp.test_vars[0] + 1;      
+//    if (board.RP.tx_usrapp.expect_status)
+//      board.RP.tx_usrapp.test_vars[0] = board.RP.tx_usrapp.test_vars[0] + 1;
 //  end
 //join
-//  
+//
 //  board.RP.tx_usrapp.expect_finish_check = 1;
 //
 //  if (board.RP.tx_usrapp.test_vars[0] == 1) begin
