@@ -1,0 +1,1950 @@
+diff --git a/plugin/p2p/build_box_250mhz.tcl b/plugin/p2p/build_box_250mhz.tcl
+index e4ed8f0..ccf3c1f 100644
+--- a/plugin/p2p/build_box_250mhz.tcl
++++ b/plugin/p2p/build_box_250mhz.tcl
+@@ -19,3 +19,4 @@ if {$num_qdma > 1} {
+     source box_250mhz/box_250mhz_axis_switch.tcl
+ }
+ read_verilog -quiet -sv p2p_250mhz.sv
++read_verilog -quiet {box_250mhz/box_250mhz_address_map_inst.vh box_250mhz/user_plugin_250mhz_inst.vh}
+\ No newline at end of file
+diff --git a/plugin/p2p/build_box_322mhz.tcl b/plugin/p2p/build_box_322mhz.tcl
+index 185f5af..ca759b5 100644
+--- a/plugin/p2p/build_box_322mhz.tcl
++++ b/plugin/p2p/build_box_322mhz.tcl
+@@ -16,3 +16,4 @@
+ #
+ # *************************************************************************
+ read_verilog -quiet -sv p2p_322mhz.sv
++read_verilog -quiet {box_322mhz/box_322mhz_address_map_inst.vh box_322mhz/user_plugin_322mhz_inst.vh}
+\ No newline at end of file
+diff --git a/script/build.tcl b/script/build.tcl
+index 6215589..a24c70a 100644
+--- a/script/build.tcl
++++ b/script/build.tcl
+@@ -95,12 +95,12 @@ set src_dir ${root_dir}/src
+ 
+ array set build_options {
+     -board_repo  ""
+-    -board       au250
++    -board       au55c
+     -tag         ""
+     -overwrite   0
+     -rebuild     0
+     -jobs        8
+-    -synth_ip    1
++    -synth_ip    0
+     -impl        0
+     -post_impl   0
+     -user_plugin ""
+@@ -186,35 +186,7 @@ source ${script_dir}/board_settings/${board}.tcl
+ 
+ # Set build directory and dump the current design parameters
+ set top open_nic_shell
+-set build_name ${board}
+-if {![string equal $tag ""]} {
+-    set build_name ${build_name}_${tag}
+-}
+-
+-set build_dir [file normalize ${root_dir}/build/${build_name}]
+-if {[file exists $build_dir]} {
+-    if {!$rebuild } {
+-        puts "Found existing build directory $build_dir"
+-        puts "  1. Update existing build directory (default)"
+-        puts "  2. Delete existing build directory and create a new one"
+-        puts "  3. Exit"
+-        puts -nonewline {Choose an option: }
+-        gets stdin ans
+-        if {[string equal $ans "2"]} {
+-            file delete -force $build_dir
+-            puts "Deleted existing build directory $build_dir"
+-            file mkdir $build_dir
+-        } elseif {[string equal $ans "3"]} {
+-            puts "Build directory existed. Try to specify a different design tag"
+-            exit
+-        }
+-    } else {
+-	file delete -force $build_dir/open_nic_shell
+-	puts "Deleted existing build director $build_dir/open_nic_shell"
+-    }
+-} else {
+-    file mkdir $build_dir
+-}
++set build_dir [file normalize ${root_dir}/../build]
+ set fp [open "${build_dir}/DESIGN_PARAMETERS" w]
+ foreach {param val} [array get design_params] {
+     puts $fp "$param $val"
+@@ -223,7 +195,7 @@ close $fp
+ 
+ # Update the board store
+ if {[string equal $board_repo ""]} {
+-    set_param board.repoPaths "${root_dir}/board_files"    
++    set_param board.repoPaths "${root_dir}/board_files"
+     # xhub::refresh_catalog [xhub::get_xstores xilinx_board_store]
+ } else {
+     set_param board.repoPaths $board_repo
+@@ -321,21 +293,7 @@ dict for {module module_dir} $module_dict {
+ close_project
+ 
+ # Setup build directory for the design
+-set top_build_dir ${build_dir}/${top}
+-
+-if {[file exists $top_build_dir] && !$overwrite} {
+-    puts "INFO: \[$top\] Use existing build (overwrite=0)"
+-    return
+-}
+-if {[file exists $top_build_dir]} {
+-    puts "INFO: \[$top\] Found existing build, deleting... (overwrite=1)"
+-    file delete -force $top_build_dir
+-}
+-
+-create_project -force $top $top_build_dir -part $part
+-if {![string equal $board_part ""]} {
+-    set_property BOARD_PART $board_part [current_project]
+-}
++set top_build_dir ${build_dir}/${prj_name}
+ set_property target_language verilog [current_project]
+ 
+ # Marco to enable conditional compilation at Verilog level
+@@ -344,6 +302,7 @@ if {$zynq_family} {
+     append verilog_define " " "__zynq_family__"
+ }
+ set_property verilog_define $verilog_define [current_fileset]
++set_property verilog_define "__simulation__ __${board}__ WORK_DIR=\\\\\"${root_dir}/../sim\\\\\"" [get_filesets sim_1]
+ 
+ # Read IPs from finished IP runs
+ # - Some IPs are board-specific and will be ignored for other board targets
+@@ -351,12 +310,17 @@ dict for {ip ip_dir} $ip_dict {
+     read_ip -quiet ${ip_dir}/${ip}.xci
+ }
+ 
++# Read the HBM block diagram
++source ${src_dir}/hbm_subsystem/hbm_bd.tcl
++make_wrapper -files [get_files ${top_build_dir}/open_nic_hbm.srcs/sources_1/bd/hbm_bd/hbm_bd.bd] -top
++add_files -norecurse ${top_build_dir}/open_nic_hbm.gen/sources_1/bd/hbm_bd/hdl/hbm_bd_wrapper.v
++
+ # Read user plugin files
+ set include_dirs [get_property include_dirs [current_fileset]]
+ foreach freq [list 250mhz 322mhz] {
+     set box "box_$freq"
+     set box_plugin ${user_plugin}/${box}
+-    
++
+     if {![file exists $box_plugin] || ![file exists ${user_plugin}/build_${box}.tcl]} {
+         set box_plugin ${plugin_dir}/p2p/${box}
+     }
+diff --git a/src/cmac_subsystem/cmac_subsystem.sv b/src/cmac_subsystem/cmac_subsystem.sv
+index d940c29..004e7f2 100644
+--- a/src/cmac_subsystem/cmac_subsystem.sv
++++ b/src/cmac_subsystem/cmac_subsystem.sv
+@@ -51,7 +51,22 @@ module cmac_subsystem #(
+   output         m_axis_cmac_rx_tlast,
+   output         m_axis_cmac_rx_tuser_err,
+ 
+-`ifdef __synthesis__
++`ifdef __simulation__
++  output         m_axis_cmac_tx_sim_tvalid,
++  output [511:0] m_axis_cmac_tx_sim_tdata,
++  output  [63:0] m_axis_cmac_tx_sim_tkeep,
++  output         m_axis_cmac_tx_sim_tlast,
++  output         m_axis_cmac_tx_sim_tuser_err,
++  input          m_axis_cmac_tx_sim_tready,
++
++  input          s_axis_cmac_rx_sim_tvalid,
++  input  [511:0] s_axis_cmac_rx_sim_tdata,
++  input   [63:0] s_axis_cmac_rx_sim_tkeep,
++  input          s_axis_cmac_rx_sim_tlast,
++  input          s_axis_cmac_rx_sim_tuser_err,
++
++  output reg     cmac_clk,
++`else
+   input    [3:0] gt_rxp,
+   input    [3:0] gt_rxn,
+   output   [3:0] gt_txp,
+@@ -67,21 +82,6 @@ module cmac_subsystem #(
+ `endif
+ 
+   output         cmac_clk,
+-`else
+-  output         m_axis_cmac_tx_sim_tvalid,
+-  output [511:0] m_axis_cmac_tx_sim_tdata,
+-  output  [63:0] m_axis_cmac_tx_sim_tkeep,
+-  output         m_axis_cmac_tx_sim_tlast,
+-  output         m_axis_cmac_tx_sim_tuser_err,
+-  input          m_axis_cmac_tx_sim_tready,
+-
+-  input          s_axis_cmac_rx_sim_tvalid,
+-  input  [511:0] s_axis_cmac_rx_sim_tdata,
+-  input   [63:0] s_axis_cmac_rx_sim_tkeep,
+-  input          s_axis_cmac_rx_sim_tlast,
+-  input          s_axis_cmac_rx_sim_tuser_err,
+-
+-  output reg     cmac_clk,
+ `endif
+ 
+   input          mod_rstn,
+@@ -286,60 +286,7 @@ module cmac_subsystem #(
+     .aresetn       (cmac_rstn)
+   );
+ 
+-`ifdef __synthesis__
+-  cmac_subsystem_cmac_wrapper #(
+-    .CMAC_ID (CMAC_ID)
+-  ) cmac_wrapper_inst (
+-    .gt_rxp              (gt_rxp),
+-    .gt_rxn              (gt_rxn),
+-    .gt_txp              (gt_txp),
+-    .gt_txn              (gt_txn),
+-
+-`ifdef __au45n__
+-    .dual0_gt_ref_clk_p (dual0_gt_ref_clk_p),
+-    .dual0_gt_ref_clk_n (dual0_gt_ref_clk_n),
+-    .dual1_gt_ref_clk_p (dual1_gt_ref_clk_p),
+-    .dual1_gt_ref_clk_n (dual1_gt_ref_clk_n),
+-`endif
+-
+-    .s_axil_awaddr       (axil_cmac_awaddr),
+-    .s_axil_awvalid      (axil_cmac_awvalid),
+-    .s_axil_awready      (axil_cmac_awready),
+-    .s_axil_wdata        (axil_cmac_wdata),
+-    .s_axil_wvalid       (axil_cmac_wvalid),
+-    .s_axil_wready       (axil_cmac_wready),
+-    .s_axil_bresp        (axil_cmac_bresp),
+-    .s_axil_bvalid       (axil_cmac_bvalid),
+-    .s_axil_bready       (axil_cmac_bready),
+-    .s_axil_araddr       (axil_cmac_araddr),
+-    .s_axil_arvalid      (axil_cmac_arvalid),
+-    .s_axil_arready      (axil_cmac_arready),
+-    .s_axil_rdata        (axil_cmac_rdata),
+-    .s_axil_rresp        (axil_cmac_rresp),
+-    .s_axil_rvalid       (axil_cmac_rvalid),
+-    .s_axil_rready       (axil_cmac_rready),
+-
+-    .s_axis_tx_tvalid    (axis_cmac_tx_tvalid),
+-    .s_axis_tx_tdata     (axis_cmac_tx_tdata),
+-    .s_axis_tx_tkeep     (axis_cmac_tx_tkeep),
+-    .s_axis_tx_tlast     (axis_cmac_tx_tlast),
+-    .s_axis_tx_tuser_err (axis_cmac_tx_tuser_err),
+-    .s_axis_tx_tready    (axis_cmac_tx_tready),
+-
+-    .m_axis_rx_tvalid    (axis_cmac_rx_tvalid),
+-    .m_axis_rx_tdata     (axis_cmac_rx_tdata),
+-    .m_axis_rx_tkeep     (axis_cmac_rx_tkeep),
+-    .m_axis_rx_tlast     (axis_cmac_rx_tlast),
+-    .m_axis_rx_tuser_err (axis_cmac_rx_tuser_err),
+-
+-    .gt_refclk_p         (gt_refclk_p),
+-    .gt_refclk_n         (gt_refclk_n),
+-    .cmac_clk            (cmac_clk),
+-    .cmac_sys_reset      (~axil_aresetn),
+-
+-    .axil_aclk           (axil_aclk)
+-  );
+-`else // !`ifdef __synthesis__
++`ifdef __simulation__
+   generate begin: cmac_sim
+     if (CMAC_ID == 0) begin
+       initial begin
+@@ -397,6 +344,59 @@ module cmac_subsystem #(
+   assign axis_cmac_rx_tkeep           = s_axis_cmac_rx_sim_tkeep;
+   assign axis_cmac_rx_tlast           = s_axis_cmac_rx_sim_tlast;
+   assign axis_cmac_rx_tuser_err       = s_axis_cmac_rx_sim_tuser_err;
++`else // !`ifdef __simulation__
++  cmac_subsystem_cmac_wrapper #(
++    .CMAC_ID (CMAC_ID)
++  ) cmac_wrapper_inst (
++    .gt_rxp              (gt_rxp),
++    .gt_rxn              (gt_rxn),
++    .gt_txp              (gt_txp),
++    .gt_txn              (gt_txn),
++
++`ifdef __au45n__
++    .dual0_gt_ref_clk_p (dual0_gt_ref_clk_p),
++    .dual0_gt_ref_clk_n (dual0_gt_ref_clk_n),
++    .dual1_gt_ref_clk_p (dual1_gt_ref_clk_p),
++    .dual1_gt_ref_clk_n (dual1_gt_ref_clk_n),
++`endif
++
++    .s_axil_awaddr       (axil_cmac_awaddr),
++    .s_axil_awvalid      (axil_cmac_awvalid),
++    .s_axil_awready      (axil_cmac_awready),
++    .s_axil_wdata        (axil_cmac_wdata),
++    .s_axil_wvalid       (axil_cmac_wvalid),
++    .s_axil_wready       (axil_cmac_wready),
++    .s_axil_bresp        (axil_cmac_bresp),
++    .s_axil_bvalid       (axil_cmac_bvalid),
++    .s_axil_bready       (axil_cmac_bready),
++    .s_axil_araddr       (axil_cmac_araddr),
++    .s_axil_arvalid      (axil_cmac_arvalid),
++    .s_axil_arready      (axil_cmac_arready),
++    .s_axil_rdata        (axil_cmac_rdata),
++    .s_axil_rresp        (axil_cmac_rresp),
++    .s_axil_rvalid       (axil_cmac_rvalid),
++    .s_axil_rready       (axil_cmac_rready),
++
++    .s_axis_tx_tvalid    (axis_cmac_tx_tvalid),
++    .s_axis_tx_tdata     (axis_cmac_tx_tdata),
++    .s_axis_tx_tkeep     (axis_cmac_tx_tkeep),
++    .s_axis_tx_tlast     (axis_cmac_tx_tlast),
++    .s_axis_tx_tuser_err (axis_cmac_tx_tuser_err),
++    .s_axis_tx_tready    (axis_cmac_tx_tready),
++
++    .m_axis_rx_tvalid    (axis_cmac_rx_tvalid),
++    .m_axis_rx_tdata     (axis_cmac_rx_tdata),
++    .m_axis_rx_tkeep     (axis_cmac_rx_tkeep),
++    .m_axis_rx_tlast     (axis_cmac_rx_tlast),
++    .m_axis_rx_tuser_err (axis_cmac_rx_tuser_err),
++
++    .gt_refclk_p         (gt_refclk_p),
++    .gt_refclk_n         (gt_refclk_n),
++    .cmac_clk            (cmac_clk),
++    .cmac_sys_reset      (~axil_aresetn),
++
++    .axil_aclk           (axil_aclk)
++  );
+ `endif
+ 
+ endmodule: cmac_subsystem
+diff --git a/src/hbm_subsystem/hbm_bd.tcl b/src/hbm_subsystem/hbm_bd.tcl
+new file mode 100644
+index 0000000..97fedbc
+--- /dev/null
++++ b/src/hbm_subsystem/hbm_bd.tcl
+@@ -0,0 +1,389 @@
++
++################################################################
++# This is a generated script based on design: hbm_bd
++#
++# Though there are limitations about the generated script,
++# the main purpose of this utility is to make learning
++# IP Integrator Tcl commands easier.
++################################################################
++
++namespace eval _tcl {
++proc get_script_folder {} {
++   set script_path [file normalize [info script]]
++   set script_folder [file dirname $script_path]
++   return $script_folder
++}
++}
++variable script_folder
++set script_folder [_tcl::get_script_folder]
++
++################################################################
++# Check if script is running in correct Vivado version.
++################################################################
++set scripts_vivado_version 2024.2
++set current_vivado_version [version -short]
++
++if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
++   puts ""
++   if { [string compare $scripts_vivado_version $current_vivado_version] > 0 } {
++      catch {common::send_gid_msg -ssname BD::TCL -id 2042 -severity "ERROR" " This script was generated using Vivado <$scripts_vivado_version> and is being run in <$current_vivado_version> of Vivado. Sourcing the script failed since it was created with a future version of Vivado."}
++
++   } else {
++     catch {common::send_gid_msg -ssname BD::TCL -id 2041 -severity "ERROR" "This script was generated using Vivado <$scripts_vivado_version> and is being run in <$current_vivado_version> of Vivado. Please run the script in Vivado <$scripts_vivado_version> then open the design in Vivado <$current_vivado_version>. Upgrade the design by running \"Tools => Report => Report IP Status...\", then run write_bd_tcl to create an updated script."}
++
++   }
++
++   return 1
++}
++
++################################################################
++# START
++################################################################
++
++# To test this script, run the following commands from Vivado Tcl console:
++# source hbm_bd_script.tcl
++
++# If there is no project opened, this script will create a
++# project, but make sure you do not have an existing project
++# <./myproj/project_1.xpr> in the current working folder.
++
++set list_projs [get_projects -quiet]
++if { $list_projs eq "" } {
++   create_project project_1 myproj -part xcu55c-fsvh2892-2L-e
++   set_property BOARD_PART xilinx.com:au55c:part0:1.0 [current_project]
++}
++
++
++# CHANGE DESIGN NAME HERE
++variable design_name
++set design_name hbm_bd
++
++# If you do not already have an existing IP Integrator design open,
++# you can create a design using the following command:
++#    create_bd_design $design_name
++
++# Creating design if needed
++set errMsg ""
++set nRet 0
++
++set cur_design [current_bd_design -quiet]
++set list_cells [get_bd_cells -quiet]
++
++if { ${design_name} eq "" } {
++   # USE CASES:
++   #    1) Design_name not set
++
++   set errMsg "Please set the variable <design_name> to a non-empty value."
++   set nRet 1
++
++} elseif { ${cur_design} ne "" && ${list_cells} eq "" } {
++   # USE CASES:
++   #    2): Current design opened AND is empty AND names same.
++   #    3): Current design opened AND is empty AND names diff; design_name NOT in project.
++   #    4): Current design opened AND is empty AND names diff; design_name exists in project.
++
++   if { $cur_design ne $design_name } {
++      common::send_gid_msg -ssname BD::TCL -id 2001 -severity "INFO" "Changing value of <design_name> from <$design_name> to <$cur_design> since current design is empty."
++      set design_name [get_property NAME $cur_design]
++   }
++   common::send_gid_msg -ssname BD::TCL -id 2002 -severity "INFO" "Constructing design in IPI design <$cur_design>..."
++
++} elseif { ${cur_design} ne "" && $list_cells ne "" && $cur_design eq $design_name } {
++   # USE CASES:
++   #    5) Current design opened AND has components AND same names.
++
++   set errMsg "Design <$design_name> already exists in your project, please set the variable <design_name> to another value."
++   set nRet 1
++} elseif { [get_files -quiet ${design_name}.bd] ne "" } {
++   # USE CASES: 
++   #    6) Current opened design, has components, but diff names, design_name exists in project.
++   #    7) No opened design, design_name exists in project.
++
++   set errMsg "Design <$design_name> already exists in your project, please set the variable <design_name> to another value."
++   set nRet 2
++
++} else {
++   # USE CASES:
++   #    8) No opened design, design_name not in project.
++   #    9) Current opened design, has components, but diff names, design_name not in project.
++
++   common::send_gid_msg -ssname BD::TCL -id 2003 -severity "INFO" "Currently there is no design <$design_name> in project, so creating one..."
++
++   create_bd_design $design_name
++
++   common::send_gid_msg -ssname BD::TCL -id 2004 -severity "INFO" "Making design <$design_name> as current_bd_design."
++   current_bd_design $design_name
++
++}
++
++common::send_gid_msg -ssname BD::TCL -id 2005 -severity "INFO" "Currently the variable <design_name> is equal to \"$design_name\"."
++
++if { $nRet != 0 } {
++   catch {common::send_gid_msg -ssname BD::TCL -id 2006 -severity "ERROR" $errMsg}
++   return $nRet
++}
++
++set bCheckIPsPassed 1
++##################################################################
++# CHECK IPs
++##################################################################
++set bCheckIPs 1
++if { $bCheckIPs == 1 } {
++   set list_check_ips "\ 
++xilinx.com:ip:hbm:1.0\
++xilinx.com:ip:clk_wiz:6.0\
++xilinx.com:ip:proc_sys_reset:5.0\
++xilinx.com:ip:smartconnect:1.0\
++"
++
++   set list_ips_missing ""
++   common::send_gid_msg -ssname BD::TCL -id 2011 -severity "INFO" "Checking if the following IPs exist in the project's IP catalog: $list_check_ips ."
++
++   foreach ip_vlnv $list_check_ips {
++      set ip_obj [get_ipdefs -all $ip_vlnv]
++      if { $ip_obj eq "" } {
++         lappend list_ips_missing $ip_vlnv
++      }
++   }
++
++   if { $list_ips_missing ne "" } {
++      catch {common::send_gid_msg -ssname BD::TCL -id 2012 -severity "ERROR" "The following IPs are not found in the IP Catalog:\n  $list_ips_missing\n\nResolution: Please add the repository containing the IP(s) to the project." }
++      set bCheckIPsPassed 0
++   }
++
++}
++
++if { $bCheckIPsPassed != 1 } {
++  common::send_gid_msg -ssname BD::TCL -id 2023 -severity "WARNING" "Will not continue with creation of design due to the error(s) above."
++  return 3
++}
++
++##################################################################
++# DESIGN PROCs
++##################################################################
++
++
++
++# Procedure to create entire design; Provide argument to make
++# procedure reusable. If parentCell is "", will use root.
++proc create_root_design { parentCell } {
++
++  variable script_folder
++  variable design_name
++
++  if { $parentCell eq "" } {
++     set parentCell [get_bd_cells /]
++  }
++
++  # Get object for parentCell
++  set parentObj [get_bd_cells $parentCell]
++  if { $parentObj == "" } {
++     catch {common::send_gid_msg -ssname BD::TCL -id 2090 -severity "ERROR" "Unable to find parent cell <$parentCell>!"}
++     return
++  }
++
++  # Make sure parentObj is hier blk
++  set parentType [get_property TYPE $parentObj]
++  if { $parentType ne "hier" } {
++     catch {common::send_gid_msg -ssname BD::TCL -id 2091 -severity "ERROR" "Parent <$parentObj> has TYPE = <$parentType>. Expected to be <hier>."}
++     return
++  }
++
++  # Save current instance; Restore later
++  set oldCurInst [current_bd_instance .]
++
++  # Set parent object as current
++  current_bd_instance $parentObj
++
++
++  # Create interface ports
++  set s_axi_hbm [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 s_axi_hbm ]
++  set_property -dict [ list \
++   CONFIG.ADDR_WIDTH {64} \
++   CONFIG.ARUSER_WIDTH {32} \
++   CONFIG.AWUSER_WIDTH {32} \
++   CONFIG.BUSER_WIDTH {0} \
++   CONFIG.DATA_WIDTH {512} \
++   CONFIG.FREQ_HZ {250000000} \
++   CONFIG.HAS_BRESP {1} \
++   CONFIG.HAS_BURST {0} \
++   CONFIG.HAS_CACHE {1} \
++   CONFIG.HAS_LOCK {1} \
++   CONFIG.HAS_PROT {1} \
++   CONFIG.HAS_QOS {0} \
++   CONFIG.HAS_REGION {0} \
++   CONFIG.HAS_RRESP {1} \
++   CONFIG.HAS_WSTRB {1} \
++   CONFIG.ID_WIDTH {4} \
++   CONFIG.MAX_BURST_LENGTH {256} \
++   CONFIG.NUM_READ_OUTSTANDING {32} \
++   CONFIG.NUM_READ_THREADS {1} \
++   CONFIG.NUM_WRITE_OUTSTANDING {32} \
++   CONFIG.NUM_WRITE_THREADS {1} \
++   CONFIG.PROTOCOL {AXI4} \
++   CONFIG.READ_WRITE_MODE {READ_WRITE} \
++   CONFIG.RUSER_BITS_PER_BYTE {0} \
++   CONFIG.RUSER_WIDTH {0} \
++   CONFIG.SUPPORTS_NARROW_BURST {0} \
++   CONFIG.WUSER_BITS_PER_BYTE {0} \
++   CONFIG.WUSER_WIDTH {64} \
++   ] $s_axi_hbm
++
++
++  # Create ports
++  set axi_resetn [ create_bd_port -dir I axi_resetn ]
++  set hbm_ref_clk [ create_bd_port -dir I -type clk -freq_hz 100000000 hbm_ref_clk ]
++  set axi_clk [ create_bd_port -dir I -type clk -freq_hz 250000000 axi_clk ]
++  set_property -dict [ list \
++   CONFIG.ASSOCIATED_BUSIF {s_axi_hbm} \
++   CONFIG.CLK_DOMAIN {hbm_bd_0_0_axi_aclk} \
++ ] $axi_clk
++
++  # Create instance: hbm_0, and set properties
++  set hbm_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:hbm:1.0 hbm_0 ]
++  set_property -dict [list \
++    CONFIG.USER_APB_EN {false} \
++    CONFIG.USER_AXI_INPUT_CLK1_FREQ {250} \
++    CONFIG.USER_AXI_INPUT_CLK_FREQ {250} \
++    CONFIG.USER_HBM_DENSITY {16GB} \
++    CONFIG.USER_MC0_USER_PARITY_EN {false} \
++    CONFIG.USER_SAXI_00 {false} \
++    CONFIG.USER_SAXI_01 {false} \
++    CONFIG.USER_SAXI_02 {false} \
++    CONFIG.USER_SAXI_03 {false} \
++    CONFIG.USER_SAXI_04 {false} \
++    CONFIG.USER_SAXI_05 {false} \
++    CONFIG.USER_SAXI_06 {false} \
++    CONFIG.USER_SAXI_07 {false} \
++    CONFIG.USER_SAXI_08 {false} \
++    CONFIG.USER_SAXI_09 {false} \
++    CONFIG.USER_SAXI_10 {false} \
++    CONFIG.USER_SAXI_11 {false} \
++    CONFIG.USER_SAXI_12 {false} \
++    CONFIG.USER_SAXI_13 {false} \
++    CONFIG.USER_SAXI_14 {false} \
++    CONFIG.USER_SAXI_16 {false} \
++    CONFIG.USER_SAXI_17 {false} \
++    CONFIG.USER_SAXI_18 {false} \
++    CONFIG.USER_SAXI_19 {false} \
++    CONFIG.USER_SAXI_20 {false} \
++    CONFIG.USER_SAXI_21 {false} \
++    CONFIG.USER_SAXI_22 {false} \
++    CONFIG.USER_SAXI_23 {false} \
++    CONFIG.USER_SAXI_24 {false} \
++    CONFIG.USER_SAXI_25 {false} \
++    CONFIG.USER_SAXI_26 {false} \
++    CONFIG.USER_SAXI_27 {false} \
++    CONFIG.USER_SAXI_28 {false} \
++    CONFIG.USER_SAXI_29 {false} \
++    CONFIG.USER_SAXI_30 {false} \
++    CONFIG.USER_SAXI_31 {false} \
++  ] $hbm_0
++
++
++  # Create instance: clk_wiz_0, and set properties
++  set clk_wiz_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_0 ]
++  set_property -dict [list \
++    CONFIG.CLKIN1_JITTER_PS {100.0} \
++    CONFIG.CLKOUT1_JITTER {115.831} \
++    CONFIG.CLKOUT1_PHASE_ERROR {87.180} \
++    CONFIG.CLK_IN1_BOARD_INTERFACE {Custom} \
++    CONFIG.MMCM_CLKFBOUT_MULT_F {12.000} \
++    CONFIG.MMCM_CLKIN1_PERIOD {10.000} \
++    CONFIG.MMCM_CLKIN2_PERIOD {10.000} \
++    CONFIG.MMCM_DIVCLK_DIVIDE {1} \
++    CONFIG.PRIM_SOURCE {Single_ended_clock_capable_pin} \
++    CONFIG.RESET_PORT {resetn} \
++    CONFIG.RESET_TYPE {ACTIVE_LOW} \
++  ] $clk_wiz_0
++
++
++  # Create instance: proc_sys_reset_0, and set properties
++  set proc_sys_reset_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_0 ]
++
++  # Create instance: smartconnect_0, and set properties
++  set smartconnect_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0 ]
++  set_property -dict [list \
++    CONFIG.NUM_MI {1} \
++    CONFIG.NUM_SI {1} \
++  ] $smartconnect_0
++
++
++  # Create interface connections
++  connect_bd_intf_net -intf_net S00_AXI_0_1 [get_bd_intf_ports s_axi_hbm] [get_bd_intf_pins smartconnect_0/S00_AXI]
++  connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_pins smartconnect_0/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_15_8HI]
++
++  # Create port connections
++  connect_bd_net -net aclk_0_1  [get_bd_ports axi_clk] \
++  [get_bd_pins smartconnect_0/aclk] \
++  [get_bd_pins hbm_0/AXI_15_ACLK]
++  connect_bd_net -net clk_in1_0_1  [get_bd_ports hbm_ref_clk] \
++  [get_bd_pins clk_wiz_0/clk_in1]
++  connect_bd_net -net clk_wiz_0_clk_out1  [get_bd_pins clk_wiz_0/clk_out1] \
++  [get_bd_pins hbm_0/HBM_REF_CLK_0] \
++  [get_bd_pins hbm_0/HBM_REF_CLK_1] \
++  [get_bd_pins hbm_0/APB_0_PCLK] \
++  [get_bd_pins hbm_0/APB_1_PCLK] \
++  [get_bd_pins proc_sys_reset_0/slowest_sync_clk]
++  connect_bd_net -net clk_wiz_0_locked  [get_bd_pins clk_wiz_0/locked] \
++  [get_bd_pins proc_sys_reset_0/dcm_locked]
++  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn  [get_bd_pins proc_sys_reset_0/peripheral_aresetn] \
++  [get_bd_pins hbm_0/APB_0_PRESET_N] \
++  [get_bd_pins hbm_0/APB_1_PRESET_N]
++  connect_bd_net -net axi_aresetn_0  [get_bd_ports axi_resetn] \
++  [get_bd_pins hbm_0/AXI_15_ARESET_N] \
++  [get_bd_pins smartconnect_0/aresetn] \
++  [get_bd_pins clk_wiz_0/resetn] \
++  [get_bd_pins proc_sys_reset_0/ext_reset_in]
++
++  # Create address segments
++  assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
++  assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
++  assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
++  assign_bd_address -offset 0x60000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM03] -force
++  assign_bd_address -offset 0x80000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM04] -force
++  assign_bd_address -offset 0xA0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM05] -force
++  assign_bd_address -offset 0xC0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM06] -force
++  assign_bd_address -offset 0xE0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM07] -force
++  assign_bd_address -offset 0x000100000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM08] -force
++  assign_bd_address -offset 0x000120000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM09] -force
++  assign_bd_address -offset 0x000140000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM10] -force
++  assign_bd_address -offset 0x000160000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM11] -force
++  assign_bd_address -offset 0x000180000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM12] -force
++  assign_bd_address -offset 0x0001A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM13] -force
++  assign_bd_address -offset 0x0001C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM14] -force
++  assign_bd_address -offset 0x0001E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM15] -force
++  assign_bd_address -offset 0x000200000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM16] -force
++  assign_bd_address -offset 0x000220000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM17] -force
++  assign_bd_address -offset 0x000240000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM18] -force
++  assign_bd_address -offset 0x000260000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM19] -force
++  assign_bd_address -offset 0x000280000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM20] -force
++  assign_bd_address -offset 0x0002A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM21] -force
++  assign_bd_address -offset 0x0002C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM22] -force
++  assign_bd_address -offset 0x0002E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM23] -force
++  assign_bd_address -offset 0x000300000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM24] -force
++  assign_bd_address -offset 0x000320000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM25] -force
++  assign_bd_address -offset 0x000340000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM26] -force
++  assign_bd_address -offset 0x000360000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM27] -force
++  assign_bd_address -offset 0x000380000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM28] -force
++  assign_bd_address -offset 0x0003A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM29] -force
++  assign_bd_address -offset 0x0003C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM30] -force
++  assign_bd_address -offset 0x0003E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM31] -force
++
++
++  # Restore current instance
++  current_bd_instance $oldCurInst
++
++  validate_bd_design
++  save_bd_design
++}
++# End of create_root_design()
++
++
++##################################################################
++# MAIN FLOW
++##################################################################
++
++create_root_design ""
++
++
+diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
+new file mode 100644
+index 0000000..4571b97
+--- /dev/null
++++ b/src/hbm_subsystem/hbm_subsystem.sv
+@@ -0,0 +1,94 @@
++module hbm_subsystem (
++  input   [63:0] s_axi_araddr,
++  input    [1:0] s_axi_arburst,
++  input    [3:0] s_axi_arcache,
++  input    [3:0] s_axi_arid,
++  input    [7:0] s_axi_arlen,
++  input    [0:0] s_axi_arlock,
++  input    [2:0] s_axi_arprot,
++  input    [3:0] s_axi_arqos,
++  output         s_axi_arready,
++  input    [2:0] s_axi_arsize,
++  input   [31:0] s_axi_aruser,
++  input          s_axi_arvalid,
++  input   [63:0] s_axi_awaddr,
++  input    [1:0] s_axi_awburst,
++  input    [3:0] s_axi_awcache,
++  input    [3:0] s_axi_awid,
++  input    [7:0] s_axi_awlen,
++  input    [0:0] s_axi_awlock,
++  input    [2:0] s_axi_awprot,
++  input    [3:0] s_axi_awqos,
++  output         s_axi_awready,
++  input    [2:0] s_axi_awsize,
++  input   [31:0] s_axi_awuser,
++  input          s_axi_awvalid,
++  output   [3:0] s_axi_bid,
++  input          s_axi_bready,
++  output   [1:0] s_axi_bresp,
++  output         s_axi_bvalid,
++  output [511:0] s_axi_rdata,
++  output   [3:0] s_axi_rid,
++  output         s_axi_rlast,
++  input          s_axi_rready,
++  output   [1:0] s_axi_rresp,
++  output         s_axi_rvalid,
++  input  [511:0] s_axi_wdata,
++  input          s_axi_wlast,
++  output         s_axi_wready,
++  input   [63:0] s_axi_wstrb,
++  input   [63:0] s_axi_wuser,
++  input          s_axi_wvalid,
++
++  input          axi_clk,
++  input          axi_resetn,
++  input          hbm_ref_clk
++);
++  
++  hbm_bd_wrapper hbm_inst (
++    .s_axi_hbm_araddr                (s_axi_araddr),
++    .s_axi_hbm_arburst               (s_axi_arburst),
++    .s_axi_hbm_arcache               (s_axi_arcache),
++    .s_axi_hbm_arid                  (s_axi_arid),
++    .s_axi_hbm_arlen                 (s_axi_arlen),
++    .s_axi_hbm_arlock                (s_axi_arlock),
++    .s_axi_hbm_arprot                (s_axi_arprot),
++    .s_axi_hbm_arqos                 (s_axi_arqos),
++    .s_axi_hbm_arready               (s_axi_arready),
++    .s_axi_hbm_arsize                (s_axi_arsize),
++    .s_axi_hbm_aruser                (s_axi_aruser),
++    .s_axi_hbm_arvalid               (s_axi_arvalid),
++    .s_axi_hbm_awaddr                (s_axi_awaddr),
++    .s_axi_hbm_awburst               (s_axi_awburst),
++    .s_axi_hbm_awcache               (s_axi_awcache),
++    .s_axi_hbm_awid                  (s_axi_awid),
++    .s_axi_hbm_awlen                 (s_axi_awlen),
++    .s_axi_hbm_awlock                (s_axi_awlock),
++    .s_axi_hbm_awprot                (s_axi_awprot),
++    .s_axi_hbm_awqos                 (s_axi_awqos),
++    .s_axi_hbm_awready               (s_axi_awready),
++    .s_axi_hbm_awsize                (s_axi_awsize),
++    .s_axi_hbm_awuser                (s_axi_awuser),
++    .s_axi_hbm_awvalid               (s_axi_awvalid),
++    .s_axi_hbm_bid                   (s_axi_bid),
++    .s_axi_hbm_bready                (s_axi_bready),
++    .s_axi_hbm_bresp                 (s_axi_bresp),
++    .s_axi_hbm_bvalid                (s_axi_bvalid),
++    .s_axi_hbm_rdata                 (s_axi_rdata),
++    .s_axi_hbm_rid                   (s_axi_rid),
++    .s_axi_hbm_rlast                 (s_axi_rlast),
++    .s_axi_hbm_rready                (s_axi_rready),
++    .s_axi_hbm_rresp                 (s_axi_rresp),
++    .s_axi_hbm_rvalid                (s_axi_rvalid),
++    .s_axi_hbm_wdata                 (s_axi_wdata),
++    .s_axi_hbm_wlast                 (s_axi_wlast),
++    .s_axi_hbm_wready                (s_axi_wready),
++    .s_axi_hbm_wstrb                 (s_axi_wstrb),
++    .s_axi_hbm_wuser                 (s_axi_wuser),
++    .s_axi_hbm_wvalid                (s_axi_wvalid),
++
++    .axi_clk                         (axi_clk),
++    .axi_resetn                      (axi_resetn),
++    .hbm_ref_clk                     (hbm_ref_clk)
++  );
++  endmodule
+\ No newline at end of file
+diff --git a/src/open_nic_shell.sv b/src/open_nic_shell.sv
+index 2f67fba..572e191 100644
+--- a/src/open_nic_shell.sv
++++ b/src/open_nic_shell.sv
+@@ -27,7 +27,6 @@ module open_nic_shell #(
+   parameter int    NUM_QDMA        = 1,
+   parameter int    NUM_CMAC_PORT   = 1
+ ) (
+-`ifdef __synthesis__
+ 
+ // Fix the CATTRIP issue for AU280, AU50, AU55C, and AU55N custom flow
+ `ifdef __au280__
+@@ -79,79 +78,14 @@ module open_nic_shell #(
+   input        [NUM_QDMA-1:0] pcie_refclk_n,
+   input        [NUM_QDMA-1:0] pcie_rstn,
+ 
+-  input    [4*NUM_CMAC_PORT-1:0] qsfp_rxp,
+-  input    [4*NUM_CMAC_PORT-1:0] qsfp_rxn,
+-  output   [4*NUM_CMAC_PORT-1:0] qsfp_txp,
+-  output   [4*NUM_CMAC_PORT-1:0] qsfp_txn,
+-
+ `ifdef __au45n__
+-  input                          dual0_gt_ref_clk_p,
+-  input                          dual0_gt_ref_clk_n,
+-  input                          dual1_gt_ref_clk_p,
+-  input                          dual1_gt_ref_clk_n,
++  input                       dual0_gt_ref_clk_p,
++  input                       dual0_gt_ref_clk_n,
++  input                       dual1_gt_ref_clk_p,
++  input                       dual1_gt_ref_clk_n,
+ `endif
+ 
+-  input      [NUM_CMAC_PORT-1:0] qsfp_refclk_p,
+-  input      [NUM_CMAC_PORT-1:0] qsfp_refclk_n
+-
+-`else // !`ifdef __synthesis__
+-  input     [NUM_QDMA-1:0] s_axil_sim_awvalid,
+-  input  [32*NUM_QDMA-1:0] s_axil_sim_awaddr,
+-  output    [NUM_QDMA-1:0] s_axil_sim_awready,
+-  input     [NUM_QDMA-1:0] s_axil_sim_wvalid,
+-  input  [32*NUM_QDMA-1:0] s_axil_sim_wdata,
+-  output    [NUM_QDMA-1:0] s_axil_sim_wready,
+-  output    [NUM_QDMA-1:0] s_axil_sim_bvalid,
+-  output  [2*NUM_QDMA-1:0] s_axil_sim_bresp,
+-  input     [NUM_QDMA-1:0] s_axil_sim_bready,
+-  input     [NUM_QDMA-1:0] s_axil_sim_arvalid,
+-  input  [32*NUM_QDMA-1:0] s_axil_sim_araddr,
+-  output    [NUM_QDMA-1:0] s_axil_sim_arready,
+-  output    [NUM_QDMA-1:0] s_axil_sim_rvalid,
+-  output [32*NUM_QDMA-1:0] s_axil_sim_rdata,
+-  output  [2*NUM_QDMA-1:0] s_axil_sim_rresp,
+-  input     [NUM_QDMA-1:0] s_axil_sim_rready,
+-
+-  input      [NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tvalid,
+-  input  [512*NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tdata,
+-  input   [32*NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tcrc,
+-  input      [NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tlast,
+-  input   [11*NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tuser_qid,
+-  input    [3*NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tuser_port_id,
+-  input      [NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tuser_err,
+-  input   [32*NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tuser_mdata,
+-  input    [6*NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tuser_mty,
+-  input      [NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tuser_zero_byte,
+-  output     [NUM_QDMA-1:0] s_axis_qdma_h2c_sim_tready,
+-
+-  output     [NUM_QDMA-1:0] m_axis_qdma_c2h_sim_tvalid,
+-  output [512*NUM_QDMA-1:0] m_axis_qdma_c2h_sim_tdata,
+-  output  [32*NUM_QDMA-1:0] m_axis_qdma_c2h_sim_tcrc,
+-  output     [NUM_QDMA-1:0] m_axis_qdma_c2h_sim_tlast,
+-  output     [NUM_QDMA-1:0] m_axis_qdma_c2h_sim_ctrl_marker,
+-  output   [3*NUM_QDMA-1:0] m_axis_qdma_c2h_sim_ctrl_port_id,
+-  output   [7*NUM_QDMA-1:0] m_axis_qdma_c2h_sim_ctrl_ecc,
+-  output  [16*NUM_QDMA-1:0] m_axis_qdma_c2h_sim_ctrl_len,
+-  output  [11*NUM_QDMA-1:0] m_axis_qdma_c2h_sim_ctrl_qid,
+-  output     [NUM_QDMA-1:0] m_axis_qdma_c2h_sim_ctrl_has_cmpt,
+-  output   [6*NUM_QDMA-1:0] m_axis_qdma_c2h_sim_mty,
+-  input      [NUM_QDMA-1:0] m_axis_qdma_c2h_sim_tready,
+-
+-  output     [NUM_QDMA-1:0] m_axis_qdma_cpl_sim_tvalid,
+-  output [512*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_tdata,
+-  output   [2*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_size,
+-  output  [16*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_dpar,
+-  output  [11*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_qid,
+-  output   [2*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_cmpt_type,
+-  output  [16*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_wait_pld_pkt_id,
+-  output   [3*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_port_id,
+-  output     [NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_marker,
+-  output     [NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_user_trig,
+-  output   [3*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_col_idx,
+-  output   [3*NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_err_idx,
+-  output     [NUM_QDMA-1:0] m_axis_qdma_cpl_sim_ctrl_no_wrb_marker,
+-  input      [NUM_QDMA-1:0] m_axis_qdma_cpl_sim_tready,
+-
++`ifdef __simulation__
+   output     [NUM_CMAC_PORT-1:0] m_axis_cmac_tx_sim_tvalid,
+   output [512*NUM_CMAC_PORT-1:0] m_axis_cmac_tx_sim_tdata,
+   output  [64*NUM_CMAC_PORT-1:0] m_axis_cmac_tx_sim_tkeep,
+@@ -163,9 +97,15 @@ module open_nic_shell #(
+   input  [512*NUM_CMAC_PORT-1:0] s_axis_cmac_rx_sim_tdata,
+   input   [64*NUM_CMAC_PORT-1:0] s_axis_cmac_rx_sim_tkeep,
+   input      [NUM_CMAC_PORT-1:0] s_axis_cmac_rx_sim_tlast,
+-  input      [NUM_CMAC_PORT-1:0] s_axis_cmac_rx_sim_tuser_err,
++  input      [NUM_CMAC_PORT-1:0] s_axis_cmac_rx_sim_tuser_err
++`else
++  input    [4*NUM_CMAC_PORT-1:0] qsfp_rxp,
++  input    [4*NUM_CMAC_PORT-1:0] qsfp_rxn,
++  output   [4*NUM_CMAC_PORT-1:0] qsfp_txp,
++  output   [4*NUM_CMAC_PORT-1:0] qsfp_txn,
+ 
+-  input  [NUM_QDMA-1:0] powerup_rstn
++  input      [NUM_CMAC_PORT-1:0] qsfp_refclk_p,
++  input      [NUM_CMAC_PORT-1:0] qsfp_refclk_n
+ `endif
+ );
+ 
+@@ -196,8 +136,6 @@ module open_nic_shell #(
+     end
+   end
+ 
+-`ifdef __synthesis__
+-
+   wire [16*NUM_QDMA-1:0] qdma_pcie_rxp;
+   wire [16*NUM_QDMA-1:0] qdma_pcie_rxn;
+   wire [16*NUM_QDMA-1:0] qdma_pcie_txp;
+@@ -253,7 +191,6 @@ module open_nic_shell #(
+ 
+ `ifdef __zynq_family__
+   zynq_usplus_ps zynq_usplus_ps_inst ();
+-`endif
+ `endif
+ 
+   wire       [NUM_QDMA-1:0] axil_qdma_awvalid;
+@@ -407,6 +344,48 @@ module open_nic_shell #(
+   wire     [NUM_CMAC_PORT-1:0] axis_cmac_rx_tlast;
+   wire     [NUM_CMAC_PORT-1:0] axis_cmac_rx_tuser_err;
+ 
++// QDMA AXI interface to the HBM subsystem
++  wire                  [63:0] axi_araddr;
++  wire                   [1:0] axi_arburst;
++  wire                   [3:0] axi_arcache;
++  wire                   [3:0] axi_arid;
++  wire                   [7:0] axi_arlen;
++  wire                   [0:0] axi_arlock;
++  wire                   [2:0] axi_arprot;
++  wire                   [3:0] axi_arqos;
++  wire                         axi_arready;
++  wire                   [2:0] axi_arsize;
++  wire                  [31:0] axi_aruser;
++  wire                         axi_arvalid;
++  wire                  [63:0] axi_awaddr;
++  wire                   [1:0] axi_awburst;
++  wire                   [3:0] axi_awcache;
++  wire                   [3:0] axi_awid;
++  wire                   [7:0] axi_awlen;
++  wire                   [0:0] axi_awlock;
++  wire                   [2:0] axi_awprot;
++  wire                   [3:0] axi_awqos;
++  wire                         axi_awready;
++  wire                   [2:0] axi_awsize;
++  wire                  [31:0] axi_awuser;
++  wire                         axi_awvalid;
++  wire                   [3:0] axi_bid;
++  wire                         axi_bready;
++  wire                   [1:0] axi_bresp;
++  wire                         axi_bvalid;
++  wire                 [511:0] axi_rdata;
++  wire                   [3:0] axi_rid;
++  wire                         axi_rlast;
++  wire                         axi_rready;
++  wire                   [1:0] axi_rresp;
++  wire                         axi_rvalid;
++  wire                 [511:0] axi_wdata;
++  wire                         axi_wlast;
++  wire                         axi_wready;
++  wire                  [63:0] axi_wstrb;
++  wire                  [63:0] axi_wuser;
++  wire                         axi_wvalid;
++
+   wire                  [31:0] shell_rstn;
+   wire                  [31:0] shell_rst_done;
+   wire          [NUM_QDMA-1:0] qdma_rstn;
+@@ -493,8 +472,8 @@ module open_nic_shell #(
+ `else
+   assign qdma_pcie_rxp       = pcie_rxp;
+   assign qdma_pcie_rxn       = pcie_rxn;
+-  assign qdma_pcie_txp       = pcie_txp;
+-  assign qdma_pcie_txn       = pcie_txn;
++  assign pcie_txp            = qdma_pcie_txp;
++  assign pcie_txn            = qdma_pcie_txn;
+ `endif
+ 
+   system_config #(
+@@ -502,7 +481,6 @@ module open_nic_shell #(
+     .NUM_QDMA        (NUM_QDMA),
+     .NUM_CMAC_PORT   (NUM_CMAC_PORT)
+   ) system_config_inst (
+-`ifdef __synthesis__
+     .s_axil_awvalid      (axil_pcie_awvalid),
+     .s_axil_awaddr       (axil_pcie_awaddr),
+     .s_axil_awready      (axil_pcie_awready),
+@@ -519,24 +497,6 @@ module open_nic_shell #(
+     .s_axil_rdata        (axil_pcie_rdata),
+     .s_axil_rresp        (axil_pcie_rresp),
+     .s_axil_rready       (axil_pcie_rready),
+-`else // !`ifdef __synthesis__
+-    .s_axil_awvalid      (s_axil_sim_awvalid),
+-    .s_axil_awaddr       (s_axil_sim_awaddr),
+-    .s_axil_awready      (s_axil_sim_awready),
+-    .s_axil_wvalid       (s_axil_sim_wvalid),
+-    .s_axil_wdata        (s_axil_sim_wdata),
+-    .s_axil_wready       (s_axil_sim_wready),
+-    .s_axil_bvalid       (s_axil_sim_bvalid),
+-    .s_axil_bresp        (s_axil_sim_bresp),
+-    .s_axil_bready       (s_axil_sim_bready),
+-    .s_axil_arvalid      (s_axil_sim_arvalid),
+-    .s_axil_araddr       (s_axil_sim_araddr),
+-    .s_axil_arready      (s_axil_sim_arready),
+-    .s_axil_rvalid       (s_axil_sim_rvalid),
+-    .s_axil_rdata        (s_axil_sim_rdata),
+-    .s_axil_rresp        (s_axil_sim_rresp),
+-    .s_axil_rready       (s_axil_sim_rready),
+-`endif
+ 
+     .m_axil_qdma_awvalid (axil_qdma_awvalid),
+     .m_axil_qdma_awaddr  (axil_qdma_awaddr),
+@@ -630,7 +590,10 @@ module open_nic_shell #(
+ 
+     .satellite_uart_0_rxd (satellite_uart_0_rxd),
+     .satellite_uart_0_txd (satellite_uart_0_txd),
++
++  `ifndef __simulation__
+     .satellite_gpio_0     (satellite_gpio),
++  `endif
+ 
+   `ifdef __au280__
+     .hbm_temp_1_0            (7'd0),
+@@ -712,7 +675,6 @@ module open_nic_shell #(
+       .s_axis_c2h_tuser_dst                 (axis_qdma_c2h_tuser_dst[`getvec(16*NUM_PHYS_FUNC, i)]),
+       .s_axis_c2h_tready                    (axis_qdma_c2h_tready[`getvec(NUM_PHYS_FUNC, i)]),
+ 
+-  `ifdef __synthesis__
+       .pcie_rxp                             (qdma_pcie_rxp[`getvec(16, i)]),
+       .pcie_rxn                             (qdma_pcie_rxn[`getvec(16, i)]),
+       .pcie_txp                             (qdma_pcie_txp[`getvec(16, i)]),
+@@ -735,53 +697,53 @@ module open_nic_shell #(
+       .m_axil_pcie_rresp                    (axil_pcie_rresp[`getvec(2, i)]),
+       .m_axil_pcie_rready                   (axil_pcie_rready[i]),
+ 
++      .m_axi_araddr                         (axi_araddr),
++      .m_axi_arburst                        (axi_arburst),
++      .m_axi_arcache                        (axi_arcache),
++      .m_axi_arid                           (axi_arid),
++      .m_axi_arlen                          (axi_arlen),
++      .m_axi_arlock                         (axi_arlock),
++      .m_axi_arprot                         (axi_arprot),
++      // .m_axi_arqos                          (axi_arqos),
++      .m_axi_arready                        (axi_arready),
++      .m_axi_arsize                         (axi_arsize),
++      .m_axi_aruser                         (axi_aruser),
++      .m_axi_arvalid                        (axi_arvalid),
++      .m_axi_awaddr                         (axi_awaddr),
++      .m_axi_awburst                        (axi_awburst),
++      .m_axi_awcache                        (axi_awcache),
++      .m_axi_awid                           (axi_awid),
++      .m_axi_awlen                          (axi_awlen),
++      .m_axi_awlock                         (axi_awlock),
++      .m_axi_awprot                         (axi_awprot),
++      // .m_axi_awqos                          (axi_awqos),
++      .m_axi_awready                        (axi_awready),
++      .m_axi_awsize                         (axi_awsize),
++      .m_axi_awuser                         (axi_awuser),
++      .m_axi_awvalid                        (axi_awvalid),
++      .m_axi_bid                            (axi_bid),
++      .m_axi_bready                         (axi_bready),
++      .m_axi_bresp                          (axi_bresp),
++      .m_axi_bvalid                         (axi_bvalid),
++      .m_axi_rdata                          (axi_rdata),
++      .m_axi_rid                            (axi_rid),
++      .m_axi_rlast                          (axi_rlast),
++      .m_axi_rready                         (axi_rready),
++      .m_axi_rresp                          (axi_rresp),
++      .m_axi_rvalid                         (axi_rvalid),
++      .m_axi_wdata                          (axi_wdata),
++      .m_axi_wlast                          (axi_wlast),
++      .m_axi_wready                         (axi_wready),
++      .m_axi_wstrb                          (axi_wstrb),
++      .m_axi_wuser                          (axi_wuser),
++      .m_axi_wvalid                         (axi_wvalid),
++
+       .pcie_refclk_p                        (pcie_refclk_p[i]),
+       .pcie_refclk_n                        (pcie_refclk_n[i]),
+       .pcie_rstn                            (pcie_rstn_int[i]),
+       .user_lnk_up                          (pcie_user_lnk_up[i]),
+       .phy_ready                            (pcie_phy_ready[i]),
+       .powerup_rstn                         (powerup_rstn[i]),
+-  `else // !`ifdef __synthesis__
+-      .s_axis_qdma_h2c_tvalid               (s_axis_qdma_h2c_sim_tvalid[i]),
+-      .s_axis_qdma_h2c_tdata                (s_axis_qdma_h2c_sim_tdata[`getvec(512, i)]),
+-      .s_axis_qdma_h2c_tcrc                 (s_axis_qdma_h2c_sim_tcrc[`getvec(32, i)]),
+-      .s_axis_qdma_h2c_tlast                (s_axis_qdma_h2c_sim_tlast[i]),
+-      .s_axis_qdma_h2c_tuser_qid            (s_axis_qdma_h2c_sim_tuser_qid[`getvec(11, i)]),
+-      .s_axis_qdma_h2c_tuser_port_id        (s_axis_qdma_h2c_sim_tuser_port_id[`getvec(3, i)]),
+-      .s_axis_qdma_h2c_tuser_err            (s_axis_qdma_h2c_sim_tuser_err[i]),
+-      .s_axis_qdma_h2c_tuser_mdata          (s_axis_qdma_h2c_sim_tuser_mdata[`getvec(32, i)]),
+-      .s_axis_qdma_h2c_tuser_mty            (s_axis_qdma_h2c_sim_tuser_mty[`getvec(6, i)]),
+-      .s_axis_qdma_h2c_tuser_zero_byte      (s_axis_qdma_h2c_sim_tuser_zero_byte[i]),
+-      .s_axis_qdma_h2c_tready               (s_axis_qdma_h2c_sim_tready[i]),
+-
+-      .m_axis_qdma_c2h_tvalid               (m_axis_qdma_c2h_sim_tvalid[i]),
+-      .m_axis_qdma_c2h_tdata                (m_axis_qdma_c2h_sim_tdata[`getvec(512, i)]),
+-      .m_axis_qdma_c2h_tcrc                 (m_axis_qdma_c2h_sim_tcrc[`getvec(32, i)]),
+-      .m_axis_qdma_c2h_tlast                (m_axis_qdma_c2h_sim_tlast[i]),
+-      .m_axis_qdma_c2h_ctrl_marker          (m_axis_qdma_c2h_sim_ctrl_marker[i]),
+-      .m_axis_qdma_c2h_ctrl_port_id         (m_axis_qdma_c2h_sim_ctrl_port_id[`getvec(3, i)]),
+-      .m_axis_qdma_c2h_ctrl_ecc             (m_axis_qdma_c2h_sim_ctrl_ecc[`getvec(7, i)]),
+-      .m_axis_qdma_c2h_ctrl_len             (m_axis_qdma_c2h_sim_ctrl_len[`getvec(16, i)]),
+-      .m_axis_qdma_c2h_ctrl_qid             (m_axis_qdma_c2h_sim_ctrl_qid[`getvec(11, i)]),
+-      .m_axis_qdma_c2h_ctrl_has_cmpt        (m_axis_qdma_c2h_sim_ctrl_has_cmpt[i]),
+-      .m_axis_qdma_c2h_mty                  (m_axis_qdma_c2h_sim_mty[`getvec(6, i)]),
+-      .m_axis_qdma_c2h_tready               (m_axis_qdma_c2h_sim_tready[i]),
+-
+-      .m_axis_qdma_cpl_tvalid               (m_axis_qdma_cpl_sim_tvalid[i]),
+-      .m_axis_qdma_cpl_tdata                (m_axis_qdma_cpl_sim_tdata[`getvec(512, i)]),
+-      .m_axis_qdma_cpl_size                 (m_axis_qdma_cpl_sim_size[`getvec(2, i)]),
+-      .m_axis_qdma_cpl_dpar                 (m_axis_qdma_cpl_sim_dpar[`getvec(16, i)]),
+-      .m_axis_qdma_cpl_ctrl_qid             (m_axis_qdma_cpl_sim_ctrl_qid[`getvec(11, i)]),
+-      .m_axis_qdma_cpl_ctrl_cmpt_type       (m_axis_qdma_cpl_sim_ctrl_cmpt_type[`getvec(2, i)]),
+-      .m_axis_qdma_cpl_ctrl_wait_pld_pkt_id (m_axis_qdma_cpl_sim_ctrl_wait_pld_pkt_id[`getvec(16, i)]),
+-      .m_axis_qdma_cpl_ctrl_port_id         (m_axis_qdma_cpl_sim_ctrl_port_id[`getvec(3, i)]),
+-      .m_axis_qdma_cpl_ctrl_marker          (m_axis_qdma_cpl_sim_ctrl_marker[i]),
+-      .m_axis_qdma_cpl_ctrl_user_trig       (m_axis_qdma_cpl_sim_ctrl_user_trig[i]),
+-      .m_axis_qdma_cpl_ctrl_col_idx         (m_axis_qdma_cpl_sim_ctrl_col_idx[`getvec(3, i)]),
+-      .m_axis_qdma_cpl_ctrl_err_idx         (m_axis_qdma_cpl_sim_ctrl_err_idx[`getvec(3, i)]),
+-      .m_axis_qdma_cpl_ctrl_no_wrb_marker   (m_axis_qdma_cpl_sim_ctrl_no_wrb_marker[i]),
+-      .m_axis_qdma_cpl_tready               (m_axis_qdma_cpl_sim_tready[i]),
+-  `endif
+ 
+       .mod_rstn                             (qdma_rstn[i]),
+       .mod_rst_done                         (qdma_rst_done[i]),
+@@ -804,6 +766,53 @@ module open_nic_shell #(
+   end: qdma_if
+   endgenerate
+ 
++  hbm_subsystem hbm_subsystem_inst (
++    .s_axi_araddr         (axi_araddr),
++    .s_axi_arburst        (axi_arburst),
++    .s_axi_arcache        (axi_arcache),
++    .s_axi_arid           (axi_arid),
++    .s_axi_arlen          (axi_arlen),
++    .s_axi_arlock         (axi_arlock),
++    .s_axi_arprot         (axi_arprot),
++    .s_axi_arqos          (axi_arqos),
++    .s_axi_arready        (axi_arready),
++    .s_axi_arsize         (axi_arsize),
++    .s_axi_aruser         (axi_aruser),
++    .s_axi_arvalid        (axi_arvalid),
++    .s_axi_awaddr         (axi_awaddr),
++    .s_axi_awburst        (axi_awburst),
++    .s_axi_awcache        (axi_awcache),
++    .s_axi_awid           (axi_awid),
++    .s_axi_awlen          (axi_awlen),
++    .s_axi_awlock         (axi_awlock),
++    .s_axi_awprot         (axi_awprot),
++    .s_axi_awqos          (axi_awqos),
++    .s_axi_awready        (axi_awready),
++    .s_axi_awsize         (axi_awsize),
++    .s_axi_awuser         (axi_awuser),
++    .s_axi_awvalid        (axi_awvalid),
++    .s_axi_bid            (axi_bid),
++    .s_axi_bready         (axi_bready),
++    .s_axi_bresp          (axi_bresp),
++    .s_axi_bvalid         (axi_bvalid),
++    .s_axi_rdata          (axi_rdata),
++    .s_axi_rid            (axi_rid),
++    .s_axi_rlast          (axi_rlast),
++    .s_axi_rready         (axi_rready),
++    .s_axi_rresp          (axi_rresp),
++    .s_axi_rvalid         (axi_rvalid),
++    .s_axi_wdata          (axi_wdata),
++    .s_axi_wlast          (axi_wlast),
++    .s_axi_wready         (axi_wready),
++    .s_axi_wstrb          (axi_wstrb),
++    .s_axi_wuser          (axi_wuser),
++    .s_axi_wvalid         (axi_wvalid),
++    
++    .axi_clk              (axis_aclk),
++    .axi_resetn           (sys_cfg_powerup_rstn),
++    .hbm_ref_clk          (ref_clk_100mhz)
++  );
++
+   generate for (genvar i = 0; i < NUM_CMAC_PORT; i++) begin: cmac_port
+     packet_adapter #(
+       .CMAC_ID     (i),
+@@ -901,7 +910,22 @@ module open_nic_shell #(
+       .m_axis_cmac_rx_tlast         (axis_cmac_rx_tlast[i]),
+       .m_axis_cmac_rx_tuser_err     (axis_cmac_rx_tuser_err[i]),
+ 
+-`ifdef __synthesis__
++`ifdef __simulation__
++      .m_axis_cmac_tx_sim_tvalid    (m_axis_cmac_tx_sim_tvalid[i]),
++      .m_axis_cmac_tx_sim_tdata     (m_axis_cmac_tx_sim_tdata[`getvec(512, i)]),
++      .m_axis_cmac_tx_sim_tkeep     (m_axis_cmac_tx_sim_tkeep[`getvec(64, i)]),
++      .m_axis_cmac_tx_sim_tlast     (m_axis_cmac_tx_sim_tlast[i]),
++      .m_axis_cmac_tx_sim_tuser_err (m_axis_cmac_tx_sim_tuser_err[i]),
++      .m_axis_cmac_tx_sim_tready    (m_axis_cmac_tx_sim_tready[i]),
++
++      .s_axis_cmac_rx_sim_tvalid    (s_axis_cmac_rx_sim_tvalid[i]),
++      .s_axis_cmac_rx_sim_tdata     (s_axis_cmac_rx_sim_tdata[`getvec(512, i)]),
++      .s_axis_cmac_rx_sim_tkeep     (s_axis_cmac_rx_sim_tkeep[`getvec(64, i)]),
++      .s_axis_cmac_rx_sim_tlast     (s_axis_cmac_rx_sim_tlast[i]),
++      .s_axis_cmac_rx_sim_tuser_err (s_axis_cmac_rx_sim_tuser_err[i]),
++
++      .cmac_clk                     (cmac_clk[i]),
++`else
+       .gt_rxp                       (qsfp_rxp[`getvec(4, i)]),
+       .gt_rxn                       (qsfp_rxn[`getvec(4, i)]),
+       .gt_txp                       (qsfp_txp[`getvec(4, i)]),
+@@ -916,21 +940,6 @@ module open_nic_shell #(
+       .dual1_gt_ref_clk_n           (dual1_gt_ref_clk_n),
+ `endif
+ 
+-      .cmac_clk                     (cmac_clk[i]),
+-`else
+-      .m_axis_cmac_tx_sim_tvalid    (m_axis_cmac_tx_sim_tvalid[i]),
+-      .m_axis_cmac_tx_sim_tdata     (m_axis_cmac_tx_sim_tdata[`getvec(512, i)]),
+-      .m_axis_cmac_tx_sim_tkeep     (m_axis_cmac_tx_sim_tkeep[`getvec(64, i)]),
+-      .m_axis_cmac_tx_sim_tlast     (m_axis_cmac_tx_sim_tlast[i]),
+-      .m_axis_cmac_tx_sim_tuser_err (m_axis_cmac_tx_sim_tuser_err[i]),
+-      .m_axis_cmac_tx_sim_tready    (m_axis_cmac_tx_sim_tready[i]),
+-
+-      .s_axis_cmac_rx_sim_tvalid    (s_axis_cmac_rx_sim_tvalid[i]),
+-      .s_axis_cmac_rx_sim_tdata     (s_axis_cmac_rx_sim_tdata[`getvec(512, i)]),
+-      .s_axis_cmac_rx_sim_tkeep     (s_axis_cmac_rx_sim_tkeep[`getvec(64, i)]),
+-      .s_axis_cmac_rx_sim_tlast     (s_axis_cmac_rx_sim_tlast[i]),
+-      .s_axis_cmac_rx_sim_tuser_err (s_axis_cmac_rx_sim_tuser_err[i]),
+-
+       .cmac_clk                     (cmac_clk[i]),
+ `endif
+ 
+diff --git a/src/qdma_subsystem/qdma_subsystem.sv b/src/qdma_subsystem/qdma_subsystem.sv
+index 2242547..bc37fbe 100644
+--- a/src/qdma_subsystem/qdma_subsystem.sv
++++ b/src/qdma_subsystem/qdma_subsystem.sv
+@@ -60,12 +60,52 @@ module qdma_subsystem #(
+   input   [16*NUM_PHYS_FUNC-1:0] s_axis_c2h_tuser_dst,
+   output     [NUM_PHYS_FUNC-1:0] s_axis_c2h_tready,
+ 
+-`ifdef __synthesis__
+   input                   [15:0] pcie_rxp,
+   input                   [15:0] pcie_rxn,
+   output                  [15:0] pcie_txp,
+   output                  [15:0] pcie_txn,
+ 
++  output                  [63:0] m_axi_araddr,
++  output                   [1:0] m_axi_arburst,
++  output                   [3:0] m_axi_arcache,
++  output                   [3:0] m_axi_arid,
++  output                   [7:0] m_axi_arlen,
++  output                   [0:0] m_axi_arlock,
++  output                   [2:0] m_axi_arprot,
++  // output                   [3:0] m_axi_arqos,
++  input                          m_axi_arready,
++  output                   [2:0] m_axi_arsize,
++  output                  [31:0] m_axi_aruser,
++  output                         m_axi_arvalid,
++  output                  [63:0] m_axi_awaddr,
++  output                   [1:0] m_axi_awburst,
++  output                   [3:0] m_axi_awcache,
++  output                   [3:0] m_axi_awid,
++  output                   [7:0] m_axi_awlen,
++  output                   [0:0] m_axi_awlock,
++  output                   [2:0] m_axi_awprot,
++  // output                   [3:0] m_axi_awqos,
++  input                          m_axi_awready,
++  output                   [2:0] m_axi_awsize,
++  output                  [31:0] m_axi_awuser,
++  output                         m_axi_awvalid,
++  input                    [3:0] m_axi_bid,
++  output                         m_axi_bready,
++  input                    [1:0] m_axi_bresp,
++  input                          m_axi_bvalid,
++  input                  [511:0] m_axi_rdata,
++  input                    [3:0] m_axi_rid,
++  input                          m_axi_rlast,
++  output                         m_axi_rready,
++  input                    [1:0] m_axi_rresp,
++  input                          m_axi_rvalid,
++  output                 [511:0] m_axi_wdata,
++  output                         m_axi_wlast,
++  input                          m_axi_wready,
++  output                  [63:0] m_axi_wstrb,
++  output                  [63:0] m_axi_wuser,
++  output                         m_axi_wvalid,
++
+   // BAR2-mapped master AXI-Lite feeding into system configuration block
+   output                         m_axil_pcie_awvalid,
+   output                  [31:0] m_axil_pcie_awaddr,
+@@ -94,54 +134,12 @@ module qdma_subsystem #(
+   // routed into the `system_config` submodule to generate proper reset signals
+   // for each submodule.
+   output                         powerup_rstn,
+-`else // !`ifdef __synthesis__
+-  input                          s_axis_qdma_h2c_tvalid,
+-  input                  [511:0] s_axis_qdma_h2c_tdata,
+-  input                   [31:0] s_axis_qdma_h2c_tcrc,
+-  input                          s_axis_qdma_h2c_tlast,
+-  input                   [10:0] s_axis_qdma_h2c_tuser_qid,
+-  input                    [2:0] s_axis_qdma_h2c_tuser_port_id,
+-  input                          s_axis_qdma_h2c_tuser_err,
+-  input                   [31:0] s_axis_qdma_h2c_tuser_mdata,
+-  input                    [5:0] s_axis_qdma_h2c_tuser_mty,
+-  input                          s_axis_qdma_h2c_tuser_zero_byte,
+-  output                         s_axis_qdma_h2c_tready,
+-
+-  output                         m_axis_qdma_c2h_tvalid,
+-  output                 [511:0] m_axis_qdma_c2h_tdata,
+-  output                  [31:0] m_axis_qdma_c2h_tcrc,
+-  output                         m_axis_qdma_c2h_tlast,
+-  output                         m_axis_qdma_c2h_ctrl_marker,
+-  output                   [2:0] m_axis_qdma_c2h_ctrl_port_id,
+-  output                   [6:0] m_axis_qdma_c2h_ctrl_ecc,
+-  output                  [15:0] m_axis_qdma_c2h_ctrl_len,
+-  output                  [10:0] m_axis_qdma_c2h_ctrl_qid,
+-  output                         m_axis_qdma_c2h_ctrl_has_cmpt,
+-  output                   [5:0] m_axis_qdma_c2h_mty,
+-  input                          m_axis_qdma_c2h_tready,
+-
+-  output                         m_axis_qdma_cpl_tvalid,
+-  output                 [511:0] m_axis_qdma_cpl_tdata,
+-  output                   [1:0] m_axis_qdma_cpl_size,
+-  output                  [15:0] m_axis_qdma_cpl_dpar,
+-  output                  [10:0] m_axis_qdma_cpl_ctrl_qid,
+-  output                   [1:0] m_axis_qdma_cpl_ctrl_cmpt_type,
+-  output                  [15:0] m_axis_qdma_cpl_ctrl_wait_pld_pkt_id,
+-  output                   [2:0] m_axis_qdma_cpl_ctrl_port_id,
+-  output                         m_axis_qdma_cpl_ctrl_marker,
+-  output                         m_axis_qdma_cpl_ctrl_user_trig,
+-  output                   [2:0] m_axis_qdma_cpl_ctrl_col_idx,
+-  output                   [2:0] m_axis_qdma_cpl_ctrl_err_idx,
+-  output                         m_axis_qdma_cpl_ctrl_no_wrb_marker,
+-  input                          m_axis_qdma_cpl_tready,
+-`endif
+ 
+   input                          mod_rstn,
+   output                         mod_rst_done,
+ 
+   input                          axil_cfg_aclk,
+ 
+-`ifdef __synthesis__
+   output                         axil_aclk,
+ 
+ `ifdef __au55n__
+@@ -155,23 +153,6 @@ module qdma_subsystem #(
+ `endif
+   input                          axis_master_aclk,
+   output                         axis_aclk
+-
+-`else // !`ifdef __synthesis__
+-  output reg                     axil_aclk,
+-
+-`ifdef __au55n__
+-  output reg                     ref_clk_100mhz,
+-`elsif __au55c__
+-  output reg                     ref_clk_100mhz,
+-`elsif __au50__
+-  output reg                     ref_clk_100mhz,
+-`elsif __au280__
+-  output reg                     ref_clk_100mhz,
+-`endif
+-  input reg                      axis_master_aclk,
+-  output reg                     axis_aclk
+-
+-`endif
+ );
+ 
+   wire         axis_qdma_h2c_tvalid;
+@@ -241,6 +222,20 @@ module qdma_subsystem #(
+   wire         h2c_byp_in_st_no_dma;
+   wire         h2c_byp_in_st_rdy;
+ 
++  wire         h2c_byp_in_mm_vld;
++  wire  [63:0] h2c_byp_in_mm_radr;
++  wire  [63:0] h2c_byp_in_mm_wadr;
++  wire  [15:0] h2c_byp_in_mm_len;
++  wire         h2c_byp_in_mm_mrkr_req;
++  wire   [2:0] h2c_byp_in_mm_port_id;
++  wire         h2c_byp_in_mm_sdi;
++  wire  [10:0] h2c_byp_in_mm_qid;
++  wire         h2c_byp_in_mm_error;
++  wire   [7:0] h2c_byp_in_mm_func;
++  wire  [15:0] h2c_byp_in_mm_cidx;
++  wire         h2c_byp_in_mm_no_dma;
++  wire         h2c_byp_in_mm_rdy;
++
+   wire         c2h_byp_out_vld;
+   wire [255:0] c2h_byp_out_dsc;
+   wire         c2h_byp_out_st_mm;
+@@ -263,6 +258,20 @@ module qdma_subsystem #(
+   wire   [6:0] c2h_byp_in_st_csh_pfch_tag;
+   wire         c2h_byp_in_st_csh_rdy;
+ 
++  wire         c2h_byp_in_mm_vld;
++  wire  [63:0] c2h_byp_in_mm_radr;
++  wire  [63:0] c2h_byp_in_mm_wadr;
++  wire  [15:0] c2h_byp_in_mm_len;
++  wire         c2h_byp_in_mm_mrkr_req;
++  wire   [2:0] c2h_byp_in_mm_port_id;
++  wire         c2h_byp_in_mm_sdi;
++  wire  [10:0] c2h_byp_in_mm_qid;
++  wire         c2h_byp_in_mm_error;
++  wire   [7:0] c2h_byp_in_mm_func;
++  wire  [15:0] c2h_byp_in_mm_cidx;
++  wire         c2h_byp_in_mm_no_dma;
++  wire         c2h_byp_in_mm_rdy;
++
+   wire         axil_aresetn;
+ 
+   // Reset is clocked by the 125MHz AXI-Lite clock
+@@ -276,7 +285,6 @@ module qdma_subsystem #(
+     .rstn         (axil_aresetn)
+   );
+ 
+-`ifdef __synthesis__
+   wire         pcie_refclk_gt;
+   wire         pcie_refclk;
+ 
+@@ -288,6 +296,18 @@ module qdma_subsystem #(
+     .ODIV2 (pcie_refclk)
+   );
+ 
++  wire hbm_ref_clk;
++
++`ifdef __au55n__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`elsif __au55c__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`elsif __au50__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`elsif __au280__
++  assign ref_clk_100mhz = hbm_ref_clk;
++`endif
++
+   assign h2c_byp_out_rdy            = 1'b1;
+   assign h2c_byp_in_st_vld          = 1'b0;
+   assign h2c_byp_in_st_addr         = 0;
+@@ -303,6 +323,19 @@ module qdma_subsystem #(
+   assign h2c_byp_in_st_cidx         = 0;
+   assign h2c_byp_in_st_no_dma       = 1'b0;
+ 
++  assign h2c_byp_in_mm_vld          = 1'b0;
++  assign h2c_byp_in_mm_radr         = 0;
++  assign h2c_byp_in_mm_wadr         = 0;
++  assign h2c_byp_in_mm_len          = 0;
++  assign h2c_byp_in_mm_mrkr_req     = 1'b0;
++  assign h2c_byp_in_mm_port_id      = 0;
++  assign h2c_byp_in_mm_sdi          = 1'b0;
++  assign h2c_byp_in_mm_qid          = 0;
++  assign h2c_byp_in_mm_error        = 1'b0;
++  assign h2c_byp_in_mm_func         = 0;
++  assign h2c_byp_in_mm_cidx         = 0;
++  assign h2c_byp_in_mm_no_dma       = 1'b0;
++
+   assign c2h_byp_out_rdy            = 1'b1;
+   assign c2h_byp_in_st_csh_vld      = 1'b0;
+   assign c2h_byp_in_st_csh_addr     = 0;
+@@ -312,6 +345,19 @@ module qdma_subsystem #(
+   assign c2h_byp_in_st_csh_func     = 0;
+   assign c2h_byp_in_st_csh_pfch_tag = 0;
+ 
++  assign c2h_byp_in_mm_vld          = 1'b0;
++  assign c2h_byp_in_mm_radr         = 0;
++  assign c2h_byp_in_mm_wadr         = 0;
++  assign c2h_byp_in_mm_len          = 0;
++  assign c2h_byp_in_mm_mrkr_req     = 1'b0;
++  assign c2h_byp_in_mm_port_id      = 0;
++  assign c2h_byp_in_mm_sdi          = 1'b0;
++  assign c2h_byp_in_mm_qid          = 0;
++  assign c2h_byp_in_mm_error        = 1'b0;
++  assign c2h_byp_in_mm_func         = 0;
++  assign c2h_byp_in_mm_cidx         = 0;
++  assign c2h_byp_in_mm_no_dma       = 1'b0;
++
+   qdma_subsystem_qdma_wrapper #(
+     .QDMA_ID (QDMA_ID)
+   ) qdma_wrapper_inst (
+@@ -404,6 +450,19 @@ module qdma_subsystem #(
+     .h2c_byp_in_st_no_dma            (h2c_byp_in_st_no_dma),
+     .h2c_byp_in_st_rdy               (h2c_byp_in_st_rdy),
+ 
++    .h2c_byp_in_mm_vld               (h2c_byp_in_mm_vld),
++    .h2c_byp_in_mm_radr              (h2c_byp_in_mm_radr),
++    .h2c_byp_in_mm_wadr              (h2c_byp_in_mm_wadr),
++    .h2c_byp_in_mm_len               (h2c_byp_in_mm_len),
++    .h2c_byp_in_mm_mrkr_req          (h2c_byp_in_mm_mrkr_req),
++    .h2c_byp_in_mm_port_id           (h2c_byp_in_mm_port_id),
++    .h2c_byp_in_mm_sdi               (h2c_byp_in_mm_sdi),
++    .h2c_byp_in_mm_qid               (h2c_byp_in_mm_qid),
++    .h2c_byp_in_mm_error             (h2c_byp_in_mm_error),
++    .h2c_byp_in_mm_func              (h2c_byp_in_mm_func),
++    .h2c_byp_in_mm_cidx              (h2c_byp_in_mm_cidx),
++    .h2c_byp_in_mm_no_dma            (h2c_byp_in_mm_no_dma),
++
+     .c2h_byp_out_vld                 (c2h_byp_out_vld),
+     .c2h_byp_out_dsc                 (c2h_byp_out_dsc),
+     .c2h_byp_out_st_mm               (c2h_byp_out_st_mm),
+@@ -426,6 +485,60 @@ module qdma_subsystem #(
+     .c2h_byp_in_st_csh_pfch_tag      (c2h_byp_in_st_csh_pfch_tag),
+     .c2h_byp_in_st_csh_rdy           (c2h_byp_in_st_csh_rdy),
+ 
++    .c2h_byp_in_mm_vld               (c2h_byp_in_mm_vld),
++    .c2h_byp_in_mm_radr              (c2h_byp_in_mm_radr),
++    .c2h_byp_in_mm_wadr              (c2h_byp_in_mm_wadr),
++    .c2h_byp_in_mm_len               (c2h_byp_in_mm_len),
++    .c2h_byp_in_mm_mrkr_req          (c2h_byp_in_mm_mrkr_req),
++    .c2h_byp_in_mm_port_id           (c2h_byp_in_mm_port_id),
++    .c2h_byp_in_mm_sdi               (c2h_byp_in_mm_sdi),
++    .c2h_byp_in_mm_qid               (c2h_byp_in_mm_qid),
++    .c2h_byp_in_mm_error             (c2h_byp_in_mm_error),
++    .c2h_byp_in_mm_func              (c2h_byp_in_mm_func),
++    .c2h_byp_in_mm_cidx              (c2h_byp_in_mm_cidx),
++    .c2h_byp_in_mm_no_dma            (c2h_byp_in_mm_no_dma),
++
++    .m_axi_araddr                    (m_axi_araddr),
++    .m_axi_arburst                   (m_axi_arburst),
++    .m_axi_arcache                   (m_axi_arcache),
++    .m_axi_arid                      (m_axi_arid),
++    .m_axi_arlen                     (m_axi_arlen),
++    .m_axi_arlock                    (m_axi_arlock),
++    .m_axi_arprot                    (m_axi_arprot),
++    // .m_axi_arqos                     (m_axi_arqos),
++    .m_axi_arready                   (m_axi_arready),
++    .m_axi_arsize                    (m_axi_arsize),
++    .m_axi_aruser                    (m_axi_aruser),
++    .m_axi_arvalid                   (m_axi_arvalid),
++    .m_axi_awaddr                    (m_axi_awaddr),
++    .m_axi_awburst                   (m_axi_awburst),
++    .m_axi_awcache                   (m_axi_awcache),
++    .m_axi_awid                      (m_axi_awid),
++    .m_axi_awlen                     (m_axi_awlen),
++    .m_axi_awlock                    (m_axi_awlock),
++    .m_axi_awprot                    (m_axi_awprot),
++    // .m_axi_awqos                     (m_axi_awqos),
++    .m_axi_awready                   (m_axi_awready),
++    .m_axi_awsize                    (m_axi_awsize),
++    .m_axi_awuser                    (m_axi_awuser),
++    .m_axi_awvalid                   (m_axi_awvalid),
++    .m_axi_bid                       (m_axi_bid),
++    .m_axi_bready                    (m_axi_bready),
++    .m_axi_bresp                     (m_axi_bresp),
++    .m_axi_bvalid                    (m_axi_bvalid),
++    .m_axi_rdata                     (m_axi_rdata),
++    .m_axi_rid                       (m_axi_rid),
++    .m_axi_rlast                     (m_axi_rlast),
++    .m_axi_rready                    (m_axi_rready),
++    .m_axi_rresp                     (m_axi_rresp),
++    .m_axi_rvalid                    (m_axi_rvalid),
++    .m_axi_wdata                     (m_axi_wdata),
++    .m_axi_wlast                     (m_axi_wlast),
++    .m_axi_wready                    (m_axi_wready),
++    .m_axi_wstrb                     (m_axi_wstrb),
++    .m_axi_wuser                     (m_axi_wuser),
++    .m_axi_wvalid                    (m_axi_wvalid),
++
+     .pcie_refclk                     (pcie_refclk),
+     .pcie_refclk_gt                  (pcie_refclk_gt),
+     .pcie_rstn                       (pcie_rstn),
+@@ -438,86 +551,17 @@ module qdma_subsystem #(
+     .axis_aclk                       (axis_aclk),
+ 
+ `ifdef __au55n__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `elsif __au55c__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `elsif __au50__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `elsif __au280__
+-    .ref_clk_100mhz                  (ref_clk_100mhz),
++    .ref_clk_100mhz                  (hbm_ref_clk),
+ `endif
+ 
+     .aresetn                         (powerup_rstn)
+   );
+-`else // !`ifdef __synthesis__
+-  initial begin
+-    axil_aclk = 1'b1;
+-    axis_aclk = 1'b1;
+-  
+-`ifdef __au55n__
+-    ref_clk_100mhz = 1'b1;
+-`elsif __au55c__
+-    ref_clk_100mhz = 1'b1;
+-`elsif __au50__
+-    ref_clk_100mhz = 1'b1;
+-`elsif __au280__
+-    ref_clk_100mhz = 1'b1;
+-`endif
+-  end
+-
+-  always #4000ps axil_aclk = ~axil_aclk;
+-  always #2000ps axis_aclk = ~axis_aclk;
+-
+-`ifdef __au55n__
+-  always #5000ps ref_clk_100mhz = ~ref_clk_100mhz;
+-`elsif __au55c__
+-  always #5000ps ref_clk_100mhz = ~ref_clk_100mhz;
+-`elsif __au50__
+-  always #5000ps ref_clk_100mhz = ~ref_clk_100mhz;
+-`elsif __au280__
+-  always #5000ps ref_clk_100mhz = ~ref_clk_100mhz;
+-`endif
+-
+-  assign axis_qdma_h2c_tvalid                 = s_axis_qdma_h2c_tvalid;
+-  assign axis_qdma_h2c_tdata                  = s_axis_qdma_h2c_tdata;
+-  assign axis_qdma_h2c_tcrc                   = s_axis_qdma_h2c_tcrc;
+-  assign axis_qdma_h2c_tlast                  = s_axis_qdma_h2c_tlast;
+-  assign axis_qdma_h2c_tuser_qid              = s_axis_qdma_h2c_tuser_qid;
+-  assign axis_qdma_h2c_tuser_port_id          = s_axis_qdma_h2c_tuser_port_id;
+-  assign axis_qdma_h2c_tuser_err              = s_axis_qdma_h2c_tuser_err;
+-  assign axis_qdma_h2c_tuser_mdata            = s_axis_qdma_h2c_tuser_mdata;
+-  assign axis_qdma_h2c_tuser_mty              = s_axis_qdma_h2c_tuser_mty;
+-  assign axis_qdma_h2c_tuser_zero_byte        = s_axis_qdma_h2c_tuser_zero_byte;
+-  assign s_axis_qdma_h2c_tready               = axis_qdma_h2c_tready;
+-
+-  assign m_axis_qdma_c2h_tvalid               = axis_qdma_c2h_tvalid;
+-  assign m_axis_qdma_c2h_tdata                = axis_qdma_c2h_tdata;
+-  assign m_axis_qdma_c2h_tcrc                 = axis_qdma_c2h_tcrc;
+-  assign m_axis_qdma_c2h_tlast                = axis_qdma_c2h_tlast;
+-  assign m_axis_qdma_c2h_ctrl_marker          = axis_qdma_c2h_ctrl_marker;
+-  assign m_axis_qdma_c2h_ctrl_port_id         = axis_qdma_c2h_ctrl_port_id;
+-  assign m_axis_qdma_c2h_ctrl_ecc             = axis_qdma_c2h_ctrl_ecc;
+-  assign m_axis_qdma_c2h_ctrl_len             = axis_qdma_c2h_ctrl_len;
+-  assign m_axis_qdma_c2h_ctrl_qid             = axis_qdma_c2h_ctrl_qid;
+-  assign m_axis_qdma_c2h_ctrl_has_cmpt        = axis_qdma_c2h_ctrl_has_cmpt;
+-  assign m_axis_qdma_c2h_mty                  = axis_qdma_c2h_mty;
+-  assign axis_qdma_c2h_tready                 = m_axis_qdma_c2h_tready;
+-
+-  assign m_axis_qdma_cpl_tvalid               = axis_qdma_cpl_tvalid;
+-  assign m_axis_qdma_cpl_tdata                = axis_qdma_cpl_tdata;
+-  assign m_axis_qdma_cpl_size                 = axis_qdma_cpl_size;
+-  assign m_axis_qdma_cpl_dpar                 = axis_qdma_cpl_dpar;
+-  assign m_axis_qdma_cpl_ctrl_qid             = axis_qdma_cpl_ctrl_qid;
+-  assign m_axis_qdma_cpl_ctrl_cmpt_type       = axis_qdma_cpl_ctrl_cmpt_type;
+-  assign m_axis_qdma_cpl_ctrl_wait_pld_pkt_id = axis_qdma_cpl_ctrl_wait_pld_pkt_id;
+-  assign m_axis_qdma_cpl_ctrl_port_id         = axis_qdma_cpl_ctrl_port_id;
+-  assign m_axis_qdma_cpl_ctrl_marker          = axis_qdma_cpl_ctrl_marker;
+-  assign m_axis_qdma_cpl_ctrl_user_trig       = axis_qdma_cpl_ctrl_user_trig;
+-  assign m_axis_qdma_cpl_ctrl_col_idx         = axis_qdma_cpl_ctrl_col_idx;
+-  assign m_axis_qdma_cpl_ctrl_err_idx         = axis_qdma_cpl_ctrl_err_idx;
+-  assign m_axis_qdma_cpl_ctrl_no_wrb_marker   = axis_qdma_cpl_ctrl_no_wrb_marker;
+-  assign axis_qdma_cpl_tready                 = m_axis_qdma_cpl_tready;
+-`endif
+ 
+   generate if (USE_PHYS_FUNC == 0) begin
+     // Terminate the AXI-lite interface for QDMA subsystem registers
+diff --git a/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v b/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v
+index 9f426ba..429f995 100644
+--- a/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v
++++ b/src/qdma_subsystem/qdma_subsystem_qdma_wrapper.v
+@@ -111,6 +111,20 @@ module qdma_subsystem_qdma_wrapper #(
+   input          h2c_byp_in_st_no_dma,
+   output         h2c_byp_in_st_rdy,
+ 
++  input          h2c_byp_in_mm_vld,
++  input   [63:0] h2c_byp_in_mm_radr,
++  input   [63:0] h2c_byp_in_mm_wadr,
++  input   [15:0] h2c_byp_in_mm_len,
++  input          h2c_byp_in_mm_mrkr_req,
++  input    [2:0] h2c_byp_in_mm_port_id,
++  input          h2c_byp_in_mm_sdi,
++  input   [10:0] h2c_byp_in_mm_qid,
++  input          h2c_byp_in_mm_error,
++  input    [7:0] h2c_byp_in_mm_func,
++  input   [15:0] h2c_byp_in_mm_cidx,
++  input          h2c_byp_in_mm_no_dma,
++  output         h2c_byp_in_mm_rdy,
++
+   output         c2h_byp_out_vld,
+   output [255:0] c2h_byp_out_dsc,
+   output         c2h_byp_out_st_mm,
+@@ -133,6 +147,61 @@ module qdma_subsystem_qdma_wrapper #(
+   input    [6:0] c2h_byp_in_st_csh_pfch_tag,
+   output         c2h_byp_in_st_csh_rdy,
+ 
++  input          c2h_byp_in_mm_vld,
++  input   [63:0] c2h_byp_in_mm_radr,
++  input   [63:0] c2h_byp_in_mm_wadr,
++  input   [15:0] c2h_byp_in_mm_len,
++  input          c2h_byp_in_mm_mrkr_req,
++  input    [2:0] c2h_byp_in_mm_port_id,
++  input          c2h_byp_in_mm_sdi,
++  input   [10:0] c2h_byp_in_mm_qid,
++  input          c2h_byp_in_mm_error,
++  input    [7:0] c2h_byp_in_mm_func,
++  input   [15:0] c2h_byp_in_mm_cidx,
++  input          c2h_byp_in_mm_no_dma,
++  output         c2h_byp_in_mm_rdy,
++
++  output  [63:0] m_axi_araddr,
++  output   [1:0] m_axi_arburst,
++  output   [3:0] m_axi_arcache,
++  output   [3:0] m_axi_arid,
++  output   [7:0] m_axi_arlen,
++  output   [0:0] m_axi_arlock,
++  output   [2:0] m_axi_arprot,
++  // output   [3:0] m_axi_arqos,
++  input          m_axi_arready,
++  output   [2:0] m_axi_arsize,
++  output  [31:0] m_axi_aruser,
++  output         m_axi_arvalid,
++  output  [63:0] m_axi_awaddr,
++  output   [1:0] m_axi_awburst,
++  output   [3:0] m_axi_awcache,
++  output   [3:0] m_axi_awid,
++  output   [7:0] m_axi_awlen,
++  output   [0:0] m_axi_awlock,
++  output   [2:0] m_axi_awprot,
++  // output   [3:0] m_axi_awqos,
++  input          m_axi_awready,
++  output   [2:0] m_axi_awsize,
++  output  [31:0] m_axi_awuser,
++  output         m_axi_awvalid,
++  input    [3:0] m_axi_bid,
++  output         m_axi_bready,
++  input    [1:0] m_axi_bresp,
++  input          m_axi_bvalid,
++  input  [511:0] m_axi_rdata,
++  input    [3:0] m_axi_rid,
++  input          m_axi_rlast,
++  output         m_axi_rready,
++  input    [1:0] m_axi_rresp,
++  input          m_axi_rvalid,
++  output [511:0] m_axi_wdata,
++  output         m_axi_wlast,
++  input          m_axi_wready,
++  output  [63:0] m_axi_wstrb,
++  output  [63:0] m_axi_wuser,
++  output         m_axi_wvalid,
++
+   input          pcie_refclk,
+   input          pcie_refclk_gt,
+   input          pcie_rstn,
+@@ -336,6 +405,20 @@ module qdma_subsystem_qdma_wrapper #(
+       .h2c_byp_out_fmt                      (h2c_byp_out_fmt),
+       .h2c_byp_out_rdy                      (h2c_byp_out_rdy),
+ 
++      .h2c_byp_in_mm_vld                    (h2c_byp_in_mm_vld),
++      .h2c_byp_in_mm_radr                   (h2c_byp_in_mm_radr),
++      .h2c_byp_in_mm_wadr                   (h2c_byp_in_mm_wadr),
++      .h2c_byp_in_mm_len                    (h2c_byp_in_mm_len),
++      .h2c_byp_in_mm_mrkr_req               (h2c_byp_in_mm_mrkr_req),
++      .h2c_byp_in_mm_port_id                (h2c_byp_in_mm_port_id),
++      .h2c_byp_in_mm_sdi                    (h2c_byp_in_mm_sdi),
++      .h2c_byp_in_mm_qid                    (h2c_byp_in_mm_qid),
++      .h2c_byp_in_mm_error                  (h2c_byp_in_mm_error),
++      .h2c_byp_in_mm_func                   (h2c_byp_in_mm_func),
++      .h2c_byp_in_mm_cidx                   (h2c_byp_in_mm_cidx),
++      .h2c_byp_in_mm_no_dma                 (h2c_byp_in_mm_no_dma),
++      .h2c_byp_in_mm_rdy                    (h2c_byp_in_mm_rdy),
++
+       .h2c_byp_in_st_vld                    (h2c_byp_in_st_vld),
+       .h2c_byp_in_st_addr                   (h2c_byp_in_st_addr),
+       .h2c_byp_in_st_len                    (h2c_byp_in_st_len),
+@@ -351,6 +434,20 @@ module qdma_subsystem_qdma_wrapper #(
+       .h2c_byp_in_st_no_dma                 (h2c_byp_in_st_no_dma),
+       .h2c_byp_in_st_rdy                    (h2c_byp_in_st_rdy),
+ 
++      .c2h_byp_in_mm_vld                    (c2h_byp_in_mm_vld),
++      .c2h_byp_in_mm_radr                   (c2h_byp_in_mm_radr),
++      .c2h_byp_in_mm_wadr                   (c2h_byp_in_mm_wadr),
++      .c2h_byp_in_mm_len                    (c2h_byp_in_mm_len),
++      .c2h_byp_in_mm_mrkr_req               (c2h_byp_in_mm_mrkr_req),
++      .c2h_byp_in_mm_port_id                (c2h_byp_in_mm_port_id),
++      .c2h_byp_in_mm_sdi                    (c2h_byp_in_mm_sdi),
++      .c2h_byp_in_mm_qid                    (c2h_byp_in_mm_qid),
++      .c2h_byp_in_mm_error                  (c2h_byp_in_mm_error),
++      .c2h_byp_in_mm_func                   (c2h_byp_in_mm_func),
++      .c2h_byp_in_mm_cidx                   (c2h_byp_in_mm_cidx),
++      .c2h_byp_in_mm_no_dma                 (c2h_byp_in_mm_no_dma),
++      .c2h_byp_in_mm_rdy                    (c2h_byp_in_mm_rdy),
++
+       .c2h_byp_out_vld                      (c2h_byp_out_vld),
+       .c2h_byp_out_dsc                      (c2h_byp_out_dsc),
+       .c2h_byp_out_st_mm                    (c2h_byp_out_st_mm),
+@@ -455,6 +552,47 @@ module qdma_subsystem_qdma_wrapper #(
+       .qsts_out_vld                         (),     // output wire qsts_out_vld
+       .qsts_out_rdy                         (1'b1), // input wire qsts_out_rdy
+ 
++      .m_axi_araddr                         (m_axi_araddr),
++      .m_axi_arburst                        (m_axi_arburst),
++      .m_axi_arcache                        (m_axi_arcache),
++      .m_axi_arid                           (m_axi_arid),
++      .m_axi_arlen                          (m_axi_arlen),
++      .m_axi_arlock                         (m_axi_arlock),
++      .m_axi_arprot                         (m_axi_arprot),
++      // .m_axi_arqos                          (m_axi_arqos),
++      .m_axi_arready                        (m_axi_arready),
++      .m_axi_arsize                         (m_axi_arsize),
++      .m_axi_aruser                         (m_axi_aruser),
++      .m_axi_arvalid                        (m_axi_arvalid),
++      .m_axi_awaddr                         (m_axi_awaddr),
++      .m_axi_awburst                        (m_axi_awburst),
++      .m_axi_awcache                        (m_axi_awcache),
++      .m_axi_awid                           (m_axi_awid),
++      .m_axi_awlen                          (m_axi_awlen),
++      .m_axi_awlock                         (m_axi_awlock),
++      .m_axi_awprot                         (m_axi_awprot),
++      // .m_axi_awqos                          (m_axi_awqos),
++      .m_axi_awready                        (m_axi_awready),
++      .m_axi_awsize                         (m_axi_awsize),
++      .m_axi_awuser                         (m_axi_awuser),
++      .m_axi_awvalid                        (m_axi_awvalid),
++      .m_axi_bid                            (m_axi_bid),
++      .m_axi_bready                         (m_axi_bready),
++      .m_axi_bresp                          (m_axi_bresp),
++      .m_axi_bvalid                         (m_axi_bvalid),
++      .m_axi_rdata                          (m_axi_rdata),
++      .m_axi_rid                            (m_axi_rid),
++      .m_axi_rlast                          (m_axi_rlast),
++      .m_axi_rready                         (m_axi_rready),
++      .m_axi_rresp                          (m_axi_rresp),
++      .m_axi_rvalid                         (m_axi_rvalid),
++      .m_axi_wdata                          (m_axi_wdata),
++      .m_axi_wlast                          (m_axi_wlast),
++      .m_axi_wready                         (m_axi_wready),
++      .m_axi_wstrb                          (m_axi_wstrb),
++      .m_axi_wuser                          (m_axi_wuser),
++      .m_axi_wvalid                         (m_axi_wvalid),
++
+       .soft_reset_n                         (soft_reset_n),
+       .phy_ready                            (phy_ready)
+     );
+diff --git a/src/qdma_subsystem/vivado_ip/qdma_no_sriov_au55c.tcl b/src/qdma_subsystem/vivado_ip/qdma_no_sriov_au55c.tcl
+index 45a6aea..929a260 100644
+--- a/src/qdma_subsystem/vivado_ip/qdma_no_sriov_au55c.tcl
++++ b/src/qdma_subsystem/vivado_ip/qdma_no_sriov_au55c.tcl
+@@ -17,44 +17,38 @@
+ # *************************************************************************
+ set qdma qdma_no_sriov
+ create_ip -name qdma -vendor xilinx.com -library ip -module_name $qdma -dir ${ip_build_dir}
+-set_property -dict {
+-    CONFIG.mode_selection {Advanced}
+-    CONFIG.pl_link_cap_max_link_width {X16}
+-    CONFIG.pl_link_cap_max_link_speed {8.0_GT/s}
+-    CONFIG.en_transceiver_status_ports {false}
+-    CONFIG.dsc_byp_mode {Descriptor_bypass_and_internal}
+-    CONFIG.testname {st}
+-    CONFIG.pf1_pciebar2axibar_2 {0x0000000000000000}
+-    CONFIG.pf2_pciebar2axibar_2 {0x0000000000000000}
+-    CONFIG.pf3_pciebar2axibar_2 {0x0000000000000000}
+-    CONFIG.dma_reset_source_sel {Phy_Ready}
+-    CONFIG.pf0_bar2_scale_qdma {Megabytes}
+-    CONFIG.pf0_bar2_size_qdma {4}
+-    CONFIG.pf1_bar2_scale_qdma {Megabytes}
+-    CONFIG.pf1_bar2_size_qdma {4}
+-    CONFIG.pf2_bar2_scale_qdma {Megabytes}
+-    CONFIG.pf2_bar2_size_qdma {4}
+-    CONFIG.pf3_bar2_scale_qdma {Megabytes}
+-    CONFIG.pf3_bar2_size_qdma {4}
+-    CONFIG.PF0_MSIX_CAP_TABLE_SIZE_qdma {009}
+-    CONFIG.PF1_MSIX_CAP_TABLE_SIZE_qdma {008}
+-    CONFIG.PF2_MSIX_CAP_TABLE_SIZE_qdma {008}
+-    CONFIG.PF3_MSIX_CAP_TABLE_SIZE_qdma {008}
+-    CONFIG.dma_intf_sel_qdma {AXI_Stream_with_Completion}
+-    CONFIG.en_axi_mm_qdma {false}
+-    CONFIG.SYS_RST_N_BOARD_INTERFACE {pcie_perstn}
+-    CONFIG.PCIE_BOARD_INTERFACE {pci_express_x16}
+-    CONFIG.xlnx_ref_board {AU55C}
+-    CONFIG.pf0_base_class_menu_qdma {Network_controller}
+-    CONFIG.pf0_class_code_base_qdma {02}
+-    CONFIG.pf0_class_code_sub_qdma {80}
+-    CONFIG.pf0_sub_class_interface_menu_qdma {Other_network_controller}
+-    CONFIG.pf0_class_code_qdma {028000}
+-    CONFIG.pf1_base_class_menu_qdma {Network_controller}
+-    CONFIG.pf1_class_code_base_qdma {02}
+-    CONFIG.pf1_class_code_sub_qdma {80}
+-    CONFIG.pf1_sub_class_interface_menu_qdma {Other_network_controller}
+-    CONFIG.pf1_class_code_qdma {028000}
+-} [get_ips $qdma]
++set_property -dict [list \
++  CONFIG.PCIE_BOARD_INTERFACE {pci_express_x16} \
++  CONFIG.PF0_MSIX_CAP_TABLE_SIZE_qdma {009} \
++  CONFIG.PF1_MSIX_CAP_TABLE_SIZE_qdma {008} \
++  CONFIG.PF2_MSIX_CAP_TABLE_SIZE_qdma {008} \
++  CONFIG.PF3_MSIX_CAP_TABLE_SIZE_qdma {008} \
++  CONFIG.SYS_RST_N_BOARD_INTERFACE {pcie_perstn} \
++  CONFIG.dma_intf_sel_qdma {AXI_MM_and_AXI_Stream_with_Completion} \
++  CONFIG.dma_reset_source_sel {Phy_Ready} \
++  CONFIG.dsc_byp_mode {Descriptor_bypass_and_internal} \
++  CONFIG.en_axi_mm_qdma {true} \
++  CONFIG.en_transceiver_status_ports {false} \
++  CONFIG.mode_selection {Advanced} \
++  CONFIG.num_queues {512} \
++  CONFIG.pf0_bar2_scale_qdma {Megabytes} \
++  CONFIG.pf0_bar2_size_qdma {4} \
++  CONFIG.pf0_base_class_menu_qdma {Network_controller} \
++  CONFIG.pf0_class_code_base_qdma {02} \
++  CONFIG.pf0_class_code_sub_qdma {80} \
++  CONFIG.pf0_sub_class_interface_menu_qdma {Other_network_controller} \
++  CONFIG.pf1_base_class_menu_qdma {Network_controller} \
++  CONFIG.pf1_class_code_base_qdma {02} \
++  CONFIG.pf1_class_code_sub_qdma {80} \
++  CONFIG.pf1_pciebar2axibar_2 {0x0000000000000000} \
++  CONFIG.pf1_sub_class_interface_menu_qdma {Other_network_controller} \
++  CONFIG.pf2_pciebar2axibar_2 {0x0000000000000000} \
++  CONFIG.pf3_pciebar2axibar_2 {0x0000000000000000} \
++  CONFIG.pl_link_cap_max_link_speed {8.0_GT/s} \
++  CONFIG.pl_link_cap_max_link_width {X16} \
++  CONFIG.testname {mm_st} \
++  CONFIG.tl_pf_enable_reg {1} \
++  CONFIG.xlnx_ref_board {AU55C} \
++] [get_ips qdma_no_sriov]
+ set_property CONFIG.tl_pf_enable_reg $num_phys_func [get_ips $qdma]
+ set_property CONFIG.num_queues $num_queue [get_ips $qdma]
+diff --git a/src/system_config/system_config.sv b/src/system_config/system_config.sv
+index b9df77d..917dc39 100644
+--- a/src/system_config/system_config.sv
++++ b/src/system_config/system_config.sv
+@@ -531,7 +531,10 @@ module system_config #(
+      .s_axi_rdata     (axil_smon_rdata),                    
+      .s_axi_rresp     (axil_smon_rresp),                    
+      .s_axi_rvalid    (axil_smon_rvalid),                    
+-     .s_axi_rready    (axil_smon_rready)
++     .s_axi_rready    (axil_smon_rready),
++
++     .vn              (1'b0),
++     .vp              (1'b0)
+   );
+ 
+   wire        cms_clk;
+@@ -691,6 +694,7 @@ axi_lite_clock_converter axi_clock_conv_cms_inst (
+       .m_axi_aresetn (cms_aresetn)
+     );
+ 
++`ifndef __simulation__
+ cms_subsystem_wrapper
+   cms_subsystem_wrapper_inst (
+     .aclk_ctrl_0             (cms_clk),
+@@ -751,5 +755,6 @@ cms_subsystem_wrapper
+     .satellite_uart_0_rxd    (satellite_uart_0_rxd),
+     .satellite_uart_0_txd    (satellite_uart_0_txd)
+   );
++`endif
+ 
+ endmodule: system_config
