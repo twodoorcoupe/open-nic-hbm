@@ -1,0 +1,1604 @@
+diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
+index 4571b97..b2fa3f7 100644
+--- a/src/hbm_subsystem/hbm_subsystem.sv
++++ b/src/hbm_subsystem/hbm_subsystem.sv
+@@ -1,4 +1,6 @@
+-module hbm_subsystem (
++module hbm_subsystem #(
++  parameter METADATA_WIDTH = 160
++) (
+   input   [63:0] s_axi_araddr,
+   input    [1:0] s_axi_arburst,
+   input    [3:0] s_axi_arcache,
+@@ -40,11 +42,47 @@ module hbm_subsystem (
+   input   [63:0] s_axi_wuser,
+   input          s_axi_wvalid,
+ 
++  input          s_axis_qdma_h2c_tvalid,
++  input  [511:0] s_axis_qdma_h2c_tdata,
++  input   [63:0] s_axis_qdma_h2c_tkeep,
++  input          s_axis_qdma_h2c_tlast,
++  input   [15:0] s_axis_qdma_h2c_tuser_size,
++  input   [15:0] s_axis_qdma_h2c_tuser_src,
++  input   [15:0] s_axis_qdma_h2c_tuser_dst,
++  output         s_axis_qdma_h2c_tready,
++
++  output         m_axis_qdma_c2h_tvalid,
++  output [511:0] m_axis_qdma_c2h_tdata,
++  output  [63:0] m_axis_qdma_c2h_tkeep,
++  output         m_axis_qdma_c2h_tlast,
++  output  [15:0] m_axis_qdma_c2h_tuser_size,
++  output  [15:0] m_axis_qdma_c2h_tuser_src,
++  output  [15:0] m_axis_qdma_c2h_tuser_dst,
++  input          m_axis_qdma_c2h_tready,
++
++  output         m_axis_cmac_h2c_tvalid,
++  output [511:0] m_axis_cmac_h2c_tdata,
++  output  [63:0] m_axis_cmac_h2c_tkeep,
++  output         m_axis_cmac_h2c_tlast,
++  output  [15:0] m_axis_cmac_h2c_tuser_size,
++  output  [15:0] m_axis_cmac_h2c_tuser_src,
++  output  [15:0] m_axis_cmac_h2c_tuser_dst,
++  input          m_axis_cmac_h2c_tready,
++
++  input          s_axis_cmac_c2h_tvalid,
++  input  [511:0] s_axis_cmac_c2h_tdata,
++  input   [63:0] s_axis_cmac_c2h_tkeep,
++  input          s_axis_cmac_c2h_tlast,
++  input   [15:0] s_axis_cmac_c2h_tuser_size,
++  input   [15:0] s_axis_cmac_c2h_tuser_src,
++  input   [15:0] s_axis_cmac_c2h_tuser_dst,
++  output         s_axis_cmac_c2h_tready,
++
+   input          axi_clk,
+-  input          axi_resetn,
++  input          axi_rstn,
+   input          hbm_ref_clk
+ );
+-  
++
+   hbm_bd_wrapper hbm_inst (
+     .s_axi_hbm_araddr                (s_axi_araddr),
+     .s_axi_hbm_arburst               (s_axi_arburst),
+@@ -88,7 +126,208 @@ module hbm_subsystem (
+     .s_axi_hbm_wvalid                (s_axi_wvalid),
+ 
+     .axi_clk                         (axi_clk),
+-    .axi_resetn                      (axi_resetn),
++    .axi_rstn                        (axi_rstn),
+     .hbm_ref_clk                     (hbm_ref_clk)
+   );
++
++  logic                      axis_parser_to_filter_tvalid;
++  logic              [511:0] axis_parser_to_filter_tdata;
++  logic               [63:0] axis_parser_to_filter_tkeep;
++  logic                      axis_parser_to_filter_tlast;
++  logic                      axis_parser_to_filter_tready;
++
++  logic                      axis_filter_to_engine_tvalid;
++  logic              [511:0] axis_filter_to_engine_tdata;
++  logic               [63:0] axis_filter_to_engine_tkeep;
++  logic                      axis_filter_to_engine_tlast;
++  logic                      axis_filter_to_engine_tready;
++
++  logic                      axis_engine_to_deparser_tvalid;
++  logic              [511:0] axis_engine_to_deparser_tdata;
++  logic               [63:0] axis_engine_to_deparser_tkeep;
++  logic                      axis_engine_to_deparser_tlast;
++  logic                      axis_engine_to_deparser_tready;
++
++  logic                      axis_deparser_to_arbiter_tvalid;
++  logic              [511:0] axis_deparser_to_arbiter_tdata;
++  logic               [63:0] axis_deparser_to_arbiter_tkeep;
++  logic                      axis_deparser_to_arbiter_tlast;
++  logic                      axis_deparser_to_arbiter_tready;
++
++  logic [METADATA_WIDTH-1:0] engine_metatada_out;
++  logic                      engine_metadata_out_valid;
++
++  logic [METADATA_WIDTH-1:0] engine_metatada_in;
++  logic                      engine_metadata_in_valid;
++
++  replication_engine replication_engine_inst (
++    .s_axis_tvalid          (axis_filter_to_engine_tvalid),
++    .s_axis_tdata           (axis_filter_to_engine_tdata),
++    .s_axis_tkeep           (axis_filter_to_engine_tkeep),
++    .s_axis_tlast           (axis_filter_to_engine_tlast),
++    .s_axis_tready          (axis_filter_to_engine_tready),
++    .metadata_in            (engine_metatada_in),
++    .metadata_in_valid      (engine_metadata_in_valid),
++
++    .m_axis_tvalid          (axis_engine_to_deparser_tvalid),
++    .m_axis_tdata           (axis_engine_to_deparser_tdata),
++    .m_axis_tkeep           (axis_engine_to_deparser_tkeep),
++    .m_axis_tlast           (axis_engine_to_deparser_tlast),
++    .m_axis_tready          (axis_engine_to_deparser_tready),
++    .metadata_out           (engine_metatada_out),
++    .metadata_out_valid     (engine_metadata_out_valid),
++
++    .s_axis_mem_tvalid      (),
++    .s_axis_mem_tdata       (),
++    .s_axis_mem_tkeep       (),
++    .s_axis_mem_tlast       (),
++    .s_axis_mem_tready      (),
++    .metadata_mem_in        (),
++    .metadata_mem_in_valid  (),
++
++    .m_axis_mem_tvalid      (),
++    .m_axis_mem_tdata       (),
++    .m_axis_mem_tkeep       (),
++    .m_axis_mem_tlast       (),
++    .m_axis_mem_tready      (),
++    .metadata_mem_out       (),
++    .metadata_mem_out_valid (),
++
++    .axis_clk               (axi_clk),
++    .axis_rstn              (axi_rstn)
++  );
++
++  logic [METADATA_WIDTH-1:0] parser_metatada_in;
++  logic                      parser_metadata_in_valid;
++
++  logic [METADATA_WIDTH-1:0] parser_metatada_out;
++  logic                      parser_metadata_out_valid;
++
++  packet_parser packet_parser_inst (
++    .s_axis_tvalid           (s_axis_cmac_c2h_tvalid), 
++    .s_axis_tdata            (s_axis_cmac_c2h_tdata), 
++    .s_axis_tkeep            (s_axis_cmac_c2h_tkeep), 
++    .s_axis_tlast            (s_axis_cmac_c2h_tlast), 
++    .s_axis_tready           (s_axis_cmac_c2h_tready), 
++    .user_metadata_in        (parser_metatada_in),
++    .user_metadata_in_valid  (parser_metadata_in_valid),
++
++    .m_axis_tvalid           (axis_parser_to_filter_tvalid), 
++    .m_axis_tdata            (axis_parser_to_filter_tdata), 
++    .m_axis_tkeep            (axis_parser_to_filter_tkeep), 
++    .m_axis_tlast            (axis_parser_to_filter_tlast), 
++    .m_axis_tready           (axis_parser_to_filter_tready), 
++    .user_metadata_out       (parser_metatada_out),
++    .user_metadata_out_valid (parser_metadata_out_valid),
++
++    .s_axis_aclk             (axi_clk),
++    .s_axis_aresetn          (axi_rstn)
++  );
++
++  // Control the parser's metadata valid in signal
++  always @(posedge axi_clk) begin
++    if(~axi_rstn)
++    begin
++      set_metadata_valid_in_low <= 1'b1;
++    end
++    else begin
++      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && !s_axis_cmac_c2h_tlast) 
++        set_metadata_valid_in_low <= 1'b0;  
++      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
++        set_metadata_valid_in_low <= 1'b1;
++    end
++  end
++
++  assign parser_metadata_in       = '0;
++  assign parser_metadata_in_valid = set_metadata_valid_in_low && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
++
++  packet_deparser packet_deparser_inst (
++    .s_axis_tvalid           (axis_engine_to_deparser_tvalid), 
++    .s_axis_tdata            (axis_engine_to_deparser_tdata), 
++    .s_axis_tkeep            (axis_engine_to_deparser_tkeep), 
++    .s_axis_tlast            (axis_engine_to_deparser_tlast), 
++    .s_axis_tready           (axis_engine_to_deparser_tready), 
++    .user_metadata_in        (engine_metatada_out),
++    .user_metadata_in_valid  (engine_metadata_out_valid),
++
++    .m_axis_tvalid           (axis_deparser_to_arbiter_tvalid), 
++    .m_axis_tdata            (axis_deparser_to_arbiter_tdata), 
++    .m_axis_tkeep            (axis_deparser_to_arbiter_tkeep), 
++    .m_axis_tlast            (axis_deparser_to_arbiter_tlast), 
++    .m_axis_tready           (axis_deparser_to_arbiter_tready), 
++    .user_metadata_out       (),
++    .user_metadata_out_valid (),
++
++    .s_axis_aclk             (axi_clk),
++    .s_axis_aresetn          (axi_rstn)
++  );
++
++  // TODO: Buffer is_replication for duration of packet transfer
++  logic is_replication;
++  assign is_replication = metadata_out[METADATA_WIDTH-1];
++
++  logic    [1:0] axis_filter_out_tvalid;
++  logic [1023:0] axis_filter_out_tdata;
++  logic  [127:0] axis_filter_out_tkeep;
++  logic    [1:0] axis_filter_out_tlast;
++  logic    [1:0] axis_filter_out_tdest;
++  logic   [95:0] axis_filter_out_tuser;
++  logic    [1:0] axis_filter_out_tready;
++
++  packet_filter packet_filter_inst (
++    .s_axis_tvalid           (axis_parser_to_filter_tvalid), 
++    .s_axis_tdata            (axis_parser_to_filter_tdata),
++    .s_axis_tkeep            (axis_parser_to_filter_tkeep),
++    .s_axis_tlast            (axis_parser_to_filter_tlast),
++    .s_axis_tuser            (),
++    .s_axis_tdest            (is_replication),
++    .s_axis_tready           (axis_parser_to_filter_tready),
++
++    .m_axis_tvalid           (axis_filter_out_tvalid),
++    .m_axis_tdata            (axis_filter_out_tdata),
++    .m_axis_tkeep            (axis_filter_out_tkeep),
++    .m_axis_tlast            (axis_filter_out_tlast),
++    .m_axis_tuser            (axis_filter_out_tuser),
++    .m_axis_tdest            (),
++    .m_axis_tready           (axis_filter_out_tready),
++
++    .aclk                    (axi_clk),
++    .aresetn                 (axi_rstn)
++  );
++
++  // Split the filter output between the QDMA and replication engine
++  assign m_axis_qdma_c2h_tvalid       = axis_filter_out_tvalid[0];
++  assign m_axis_qdma_c2h_tdata        = axis_filter_out_tdata[511:0];
++  assign m_axis_qdma_c2h_tkeep        = axis_filter_out_tkeep[63:0];
++  assign m_axis_qdma_c2h_tlast        = axis_filter_out_tlast[0];
++  assign m_axis_qdma_c2h_tuser_size   = '0;
++  assign m_axis_qdma_c2h_tuser_src    = '0;
++  assign m_axis_qdma_c2h_tuser_dst    = '0;
++  assign axis_filter_out_tready[0]    = m_axis_qdma_c2h_tready;
++
++  assign axis_filter_to_engine_tvalid = axis_filter_out_tvalid[1];
++  assign axis_filter_to_engine_tdata  = axis_filter_out_tdata[1023-:512];
++  assign axis_filter_to_engine_tkeep  = axis_filter_out_tkeep[127-:64];
++  assign axis_filter_to_engine_tlast  = axis_filter_out_tlast[1];
++  assign axis_filter_out_tready[1]    = axis_filter_to_engine_tready;
++
++  packet_arbiter packet_arbiter_inst (
++    .s_axis_tvalid           ({axis_parser_to_filter_tvalid, s_axis_qdma_h2c_tvalid}), 
++    .s_axis_tdata            ({axis_parser_to_filter_tdata, s_axis_qdma_h2c_tdata}),
++    .s_axis_tkeep            ({axis_parser_to_filter_tkeep, s_axis_qdma_h2c_tkeep}),
++    .s_axis_tlast            ({axis_parser_to_filter_tlast, s_axis_qdma_h2c_tlast}),
++    .s_axis_tuser            ('0),
++    .s_axis_tready           ({axis_parser_to_filter_tready, s_axis_qdma_h2c_tready}),
++
++    .m_axis_tvalid           (m_axis_cmac_h2c_tvalid),
++    .m_axis_tdata            (m_axis_cmac_h2c_tdata),
++    .m_axis_tkeep            (m_axis_cmac_h2c_tkeep),
++    .m_axis_tlast            (m_axis_cmac_h2c_tlast),
++    .m_axis_tuser            (m_axis_cmac_h2c_tuser),
++    .m_axis_tready           (m_axis_cmac_h2c_tready),
++
++    .aclk                    (axi_clk),
++    .aresetn                 (axi_rstn)
++  );
++
+   endmodule
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
+new file mode 100644
+index 0000000..dabe418
+--- /dev/null
++++ b/src/hbm_subsystem/packet_deparser.p4
+@@ -0,0 +1,233 @@
++#include <core.p4>
++#include <xsa.p4>
++
++typedef bit<48>  MacAddr;
++typedef bit<32>  IPv4Addr;
++
++const bit<16> QINQ_TYPE = 0x88A8;
++const bit<16> VLAN_TYPE = 0x8100;
++const bit<16> IPV4_TYPE = 0x0800;
++
++const bit<8>  TCP_PROT  = 0x06;
++const bit<8>  UDP_PROT  = 0x11;
++
++const bit<16> REPLICATION_PORT = 0x7777;
++
++const bit<16> IP_HEADER_SIZE   = 20;
++const bit<16> HEADERS_SIZE     = 8 + 2 + 64;  // UDP + replication + key
++const bit<16> READ_RESULT_SIZE = HEADERS_SIZE + 1015;
++
++// Operations in rep header
++const bit<8> READ        = 0x00;
++const bit<8> WRITE       = 0x01;
++const bit<8> READ_RESULT = 0x02;
++const bit<8> WRITE_ACK   = 0x03;
++
++// ********************************************************************** //
++// *************************** H E A D E R S  *************************** //
++// ********************************************************************** //
++
++header eth_mac_t {
++  MacAddr dmac; // Destination MAC address
++  MacAddr smac; // Source MAC address
++  bit<16> type; // Tag Protocol Identifier
++}
++
++header vlan_t {
++  bit<3>  pcp;  // Priority code point
++  bit<1>  cfi;  // Drop eligible indicator
++  bit<12> vid;  // VLAN identifier
++  bit<16> tpid; // Tag protocol identifier
++}
++
++header ipv4_t {
++  bit<4>   version;  // Version (4 for IPv4)
++  bit<4>   hdr_len;  // Header length in 32b words
++  bit<8>   tos;      // Type of Service
++  bit<16>  length;   // Packet length in 32b words
++  bit<16>  id;       // Identification
++  bit<3>   flags;    // Flags
++  bit<13>  offset;   // Fragment offset
++  bit<8>   ttl;      // Time to live
++  bit<8>   protocol; // Next protocol
++  bit<16>  hdr_chk;  // Header checksum
++  IPv4Addr src;      // Source address
++  IPv4Addr dst;      // Destination address
++}
++
++header ipv4_opt_t {
++  varbit<320> options; // IPv4 options - length = (ipv4.hdr_len - 5) * 32
++}
++
++header tcp_t {
++  bit<16> src_port;   // Source port
++  bit<16> dst_port;   // Destination port
++  bit<32> seqNum;     // Sequence number
++  bit<32> ackNum;     // Acknowledgment number
++  bit<4>  dataOffset; // Data offset
++  bit<6>  resv;       // Offset
++  bit<6>  flags;      // Flags
++  bit<16> window;     // Window
++  bit<16> checksum;   // TCP checksum
++  bit<16> urgPtr;     // Urgent pointer
++}
++
++header tcp_opt_t {
++  varbit<320> options; // TCP options - length = (tcp.dataOffset - 5) * 32
++}
++
++header udp_t {
++  bit<16> src_port;  // Source port
++  bit<16> dst_port;  // Destination port
++  bit<16> length;    // UDP length
++  bit<16> checksum;  // UDP checksum
++}
++
++/* Replication header */
++header rep_h {
++  bit<8>  opcode;
++  bit<8>  id;
++}
++
++header key_h {
++  bit<64> key;
++}
++
++// ********************************************************************** //
++// ************************* S T R U C T U R E S  *********************** //
++// ********************************************************************** //
++
++// header structure
++struct headers {
++  eth_mac_t  eth;
++  vlan_t     new_vlan;
++  vlan_t     vlan;
++  ipv4_t     ipv4;
++  ipv4_opt_t ipv4opt;
++  tcp_t      tcp;
++  tcp_opt_t  tcpopt;
++  udp_t      udp;
++  rep_h      rep;
++  key_h      key;
++}
++
++struct metadata_t {
++  bit<32> ip_src;
++  bit<48> mac_src;
++  bit<8>  opcode;
++  bit<8>  index;
++  bit<64> key;
++
++  // Fixed values
++  bit<32> ip_own;
++  bit<48> mac_own;
++}
++
++// User-defined errors
++error {
++  InvalidIPpacket,
++  InvalidTCPpacket
++}
++
++// ********************************************************************** //
++// *************************** P A R S E R  ***************************** //
++// ********************************************************************** //
++
++parser MyParser(packet_in packet,
++                out headers hdr,
++                inout metadata_t meta,
++                inout standard_metadata_t smeta) {
++
++  state start {
++    transition accept;
++  }
++}
++
++// ********************************************************************** //
++// **************************  P R O C E S S I N G   ******************** //
++// ********************************************************************** //
++
++control MyProcessing(inout headers hdr,
++                     inout metadata_t meta,
++                     inout standard_metadata_t smeta) {
++  InternetChecksum() ck;
++  bit<16> ip_length;
++  bit<16> udp_length;
++  bit<16> csum;
++
++  apply {
++    if (meta.opcode == READ_RESULT) {
++      ip_length  = READ_RESULT_SIZE + IP_HEADER_SIZE;
++      udp_length = READ_RESULT_SIZE;
++    } else {
++      ip_length  = HEADERS_SIZE + IP_HEADER_SIZE;
++      udp_length = HEADERS_SIZE;
++    }
++
++    hdr.eth.setValid();
++    hdr.ipv4.setValid();
++    hdr.udp.setValid();
++    hdr.rep.setValid();
++    hdr.key.setValid();
++
++    hdr.eth.dmac            = meta.mac_src;
++    hdr.eth.smac            = meta.mac_own;
++    hdr.eth.type            = IPV4_TYPE;
++
++    hdr.ipv4.version        = 4;
++    hdr.ipv4.hdr_len        = 5;
++    hdr.ipv4.tos            = 0;
++    hdr.ipv4.length         = ip_length;
++    hdr.ipv4.id             = 0;
++    hdr.ipv4.flags          = 0;
++    hdr.ipv4.offset         = 0;
++    hdr.ipv4.ttl            = 64;
++    hdr.ipv4.protocol       = UDP_PROT;
++    hdr.ipv4.hdr_chk        = 0;  // Calculated below
++    hdr.ipv4.src            = meta.ip_own;
++    hdr.ipv4.dst            = meta.ip_src;
++
++    hdr.udp.src_port        = REPLICATION_PORT;
++    hdr.udp.dst_port        = REPLICATION_PORT;
++    hdr.udp.length          = udp_length;
++    hdr.udp.checksum        = 0;
++
++    hdr.rep.opcode          = meta.opcode;
++    hdr.rep.id              = meta.index;
++    hdr.key.key             = meta.key;
++
++    ck.clear();
++    ck.add({hdr.ipv4.version, hdr.ipv4.hdr_len, hdr.ipv4.tos, hdr.ipv4.length, hdr.ipv4.id, hdr.ipv4.flags, hdr.ipv4.offset});
++    ck.add({hdr.ipv4.ttl, hdr.ipv4.protocol, hdr.ipv4.src, hdr.ipv4.dst});
++    ck.get(csum);
++    hdr.ipv4.hdr_chk = csum;
++  }
++}
++
++
++// ********************************************************************** //
++// ***************************  D E P A R S E R  ************************ //
++// ********************************************************************** //
++
++control MyDeparser(packet_out packet,
++                   in headers hdr,
++                   inout metadata_t meta,
++                   inout standard_metadata_t smeta) {
++  apply {
++    packet.emit(hdr.eth);
++    packet.emit(hdr.ipv4);
++    packet.emit(hdr.udp);
++    packet.emit(hdr.rep);
++    packet.emit(hdr.key);
++  }
++}
++
++// ********************************************************************** //
++// *******************************  M A I N  **************************** //
++// ********************************************************************** //
++
++XilinxPipeline(
++  MyParser(),
++  MyProcessing(),
++  MyDeparser()
++) main;
+diff --git a/src/hbm_subsystem/packet_parser.p4 b/src/hbm_subsystem/packet_parser.p4
+new file mode 100644
+index 0000000..1b33efd
+--- /dev/null
++++ b/src/hbm_subsystem/packet_parser.p4
+@@ -0,0 +1,269 @@
++// TODO: Filter out read results as well
++// TODO: Add size from tuser to metadata
++#include <core.p4>
++#include <xsa.p4>
++
++typedef bit<48>  MacAddr;
++typedef bit<32>  IPv4Addr;
++
++const bit<16> QINQ_TYPE = 0x88A8;
++const bit<16> VLAN_TYPE = 0x8100;
++const bit<16> IPV4_TYPE = 0x0800;
++
++const bit<8>  TCP_PROT  = 0x06;
++const bit<8>  UDP_PROT  = 0x11;
++
++const bit<16> REPLICATION_PORT = 0x7777;
++
++// Operations in rep header
++const bit<8> READ        = 0x00;
++const bit<8> WRITE       = 0x01;
++const bit<8> READ_RESULT = 0x02;
++const bit<8> WRITE_ACK   = 0x03;
++
++// ********************************************************************** //
++// *************************** H E A D E R S  *************************** //
++// ********************************************************************** //
++
++header eth_mac_t {
++  MacAddr dmac; // Destination MAC address
++  MacAddr smac; // Source MAC address
++  bit<16> type; // Tag Protocol Identifier
++}
++
++header vlan_t {
++  bit<3>  pcp;  // Priority code point
++  bit<1>  cfi;  // Drop eligible indicator
++  bit<12> vid;  // VLAN identifier
++  bit<16> tpid; // Tag protocol identifier
++}
++
++header ipv4_t {
++  bit<4>   version;  // Version (4 for IPv4)
++  bit<4>   hdr_len;  // Header length in 32b words
++  bit<8>   tos;      // Type of Service
++  bit<16>  length;   // Packet length in 32b words
++  bit<16>  id;       // Identification
++  bit<3>   flags;    // Flags
++  bit<13>  offset;   // Fragment offset
++  bit<8>   ttl;      // Time to live
++  bit<8>   protocol; // Next protocol
++  bit<16>  hdr_chk;  // Header checksum
++  IPv4Addr src;      // Source address
++  IPv4Addr dst;      // Destination address
++}
++
++header ipv4_opt_t {
++  varbit<320> options; // IPv4 options - length = (ipv4.hdr_len - 5) * 32
++}
++
++header tcp_t {
++  bit<16> src_port;   // Source port
++  bit<16> dst_port;   // Destination port
++  bit<32> seqNum;     // Sequence number
++  bit<32> ackNum;     // Acknowledgment number
++  bit<4>  dataOffset; // Data offset
++  bit<6>  resv;       // Offset
++  bit<6>  flags;      // Flags
++  bit<16> window;     // Window
++  bit<16> checksum;   // TCP checksum
++  bit<16> urgPtr;     // Urgent pointer
++}
++
++header tcp_opt_t {
++  varbit<320> options; // TCP options - length = (tcp.dataOffset - 5) * 32
++}
++
++header udp_t {
++  bit<16> src_port;  // Source port
++  bit<16> dst_port;  // Destination port
++  bit<16> length;    // UDP length
++  bit<16> checksum;  // UDP checksum
++}
++
++/* Replication header */
++header rep_h {
++  bit<8>  opcode;
++  bit<8>  id;
++}
++
++header key_h {
++  bit<64> key;
++}
++
++// ********************************************************************** //
++// ************************* S T R U C T U R E S  *********************** //
++// ********************************************************************** //
++
++// header structure
++struct headers {
++  eth_mac_t  eth;
++  vlan_t     new_vlan;
++  vlan_t     vlan;
++  ipv4_t     ipv4;
++  ipv4_opt_t ipv4opt;
++  tcp_t      tcp;
++  tcp_opt_t  tcpopt;
++  udp_t      udp;
++  rep_h      rep;
++  key_h      key;
++}
++
++struct metadata_t {
++  bit<32> ip_src;
++  bit<48> mac_src;
++  bit<8>  opcode;
++  bit<8>  index;
++  bit<64> key;
++  bit<1>  is_rep;
++}
++
++// User-defined errors
++error {
++  InvalidIPpacket,
++  InvalidTCPpacket
++}
++
++// ********************************************************************** //
++// *************************** P A R S E R  ***************************** //
++// ********************************************************************** //
++
++parser MyParser(packet_in packet,
++                out headers hdr,
++                inout metadata_t meta,
++                inout standard_metadata_t smeta) {
++
++  state start {
++    transition parse_eth;
++  }
++
++  state parse_eth {
++    packet.extract(hdr.eth);
++    transition select(hdr.eth.type) {
++      VLAN_TYPE : parse_vlan;
++      IPV4_TYPE : parse_ipv4;
++      default   : accept;
++    }
++  }
++
++  state parse_vlan {
++    packet.extract(hdr.vlan);
++    transition select(hdr.vlan.tpid) {
++      IPV4_TYPE : parse_ipv4;
++      default   : accept;
++    }
++  }
++
++  state parse_ipv4 {
++    packet.extract(hdr.ipv4);
++    verify(hdr.ipv4.version == 4 && hdr.ipv4.hdr_len >= 5, error.InvalidIPpacket);
++    packet.extract(hdr.ipv4opt, (((bit<32>)hdr.ipv4.hdr_len - 5) * 32));
++    transition select(hdr.ipv4.protocol) {
++      TCP_PROT  : parse_tcp;
++      UDP_PROT  : parse_udp;
++      default   : accept;
++    }
++  }
++
++  state parse_tcp {
++    packet.extract(hdr.tcp);
++    verify(hdr.tcp.dataOffset >= 5, error.InvalidTCPpacket);
++    packet.extract(hdr.tcpopt,(((bit<32>)hdr.tcp.dataOffset - 5) * 32));
++    transition accept;
++  }
++
++  state parse_udp {
++    packet.extract(hdr.udp);
++    transition select(hdr.udp.dst_port) {
++      REPLICATION_PORT : parse_rep;
++      default          : accept;
++    }
++  }
++
++  state parse_rep {
++    packet.extract(hdr.rep);
++    transition parse_key;
++  }
++
++  state parse_key {
++    packet.extract(hdr.key);
++    transition accept;
++  }
++}
++
++// ********************************************************************** //
++// **************************  P R O C E S S I N G   ******************** //
++// ********************************************************************** //
++
++control MyProcessing(inout headers hdr,
++                     inout metadata_t meta,
++                     inout standard_metadata_t smeta) {
++
++  bit<32> ip_src;
++  bit<48> mac_src;
++  bit<8>  opcode;
++  bit<8>  index;
++  bit<64> key;
++  bit<1>  is_rep;
++
++  apply {
++    ip_src  = (bit<32>) 0;
++    mac_src = (bit<48>) 0;
++    opcode  = (bit<8>) 0;
++    index   = (bit<8>) 0;
++    key     = (bit<64>) 0;
++    is_rep  = (bit<1>) 0;
++
++    if (hdr.eth.isValid() && hdr.ipv4.isValid() && hdr.udp.isValid() && hdr.rep.isValid() && hdr.key.isValid()) {
++      ip_src  = hdr.ipv4.src;
++      mac_src = hdr.eth.smac;
++      opcode  = hdr.rep.opcode;
++      index   = hdr.rep.id;
++      key     = hdr.key.key;
++      is_rep  = (bit<1>) 1;
++
++      hdr.eth.setInvalid();
++      hdr.ipv4.setInvalid();
++      hdr.udp.setInvalid();
++      hdr.rep.setInvalid();
++    }
++
++    meta.ip_src = ip_src;
++    meta.opcode = opcode;
++    meta.index  = index;
++    meta.key    = key;
++    meta.is_rep = is_rep;
++  }
++}
++
++// ********************************************************************** //
++// ***************************  D E P A R S E R  ************************ //
++// ********************************************************************** //
++
++control MyDeparser(packet_out packet,
++                   in headers hdr,
++                   inout metadata_t meta,
++                   inout standard_metadata_t smeta) {
++  apply {
++    packet.emit(hdr.eth);
++    packet.emit(hdr.new_vlan);
++    packet.emit(hdr.vlan);
++    packet.emit(hdr.ipv4);
++    packet.emit(hdr.ipv4opt);
++    packet.emit(hdr.tcp);
++    packet.emit(hdr.tcpopt);
++    packet.emit(hdr.udp);
++    packet.emit(hdr.rep);
++    packet.emit(hdr.key);
++  }
++}
++
++// ********************************************************************** //
++// *******************************  M A I N  **************************** //
++// ********************************************************************** //
++
++XilinxPipeline(
++  MyParser(),
++  MyProcessing(),
++  MyDeparser()
++) main;
+diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
+new file mode 100644
+index 0000000..a6328e5
+--- /dev/null
++++ b/src/hbm_subsystem/replication_engine.sv
+@@ -0,0 +1,586 @@
++`timescale 1ns/1ps
++
++typedef struct packed {
++  logic          [31:0] ip;      // IPv4 address of the sender
++  logic          [47:0] mac;     // Mac address of the sender
++  logic           [7:0] id;      // Operation identifier used to distinguish consecutive writes
++  logic           [7:0] opcode;  // Operation code
++  logic          [63:0] key;
++} st_metadata;
++
++module replication_engine #(
++  parameter DATA_WIDTH = 512,
++  parameter KEEP_WIDTH = DATA_WIDTH / 8,
++  parameter KEY_WIDTH  = 64,
++  parameter NUM_NODES  = 4,
++  parameter logic [31:0] NODES_IPS [NUM_NODES] = '{default: '0}
++) (
++  input  logic axis_clk,
++  input  logic axis_rstn,
++
++  // Replication packet input
++  input  logic                  s_axis_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
++  input  logic                  s_axis_tlast,
++  output logic                  s_axis_tready,
++
++  input  st_metadata            metadata_in,
++  input  logic                  metadata_in_valid,
++
++  // Replication packet output
++  output logic                  m_axis_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
++  output logic                  m_axis_tlast,
++  input  logic                  m_axis_tready,
++
++  output st_metadata            metadata_out,
++  output logic                  metadata_out_valid,
++
++  // Memory controller read
++  input  logic                  s_axis_mem_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_mem_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_mem_tkeep,
++  input  logic                  s_axis_mem_tlast,
++  output logic                  s_axis_mem_tready,
++
++  input  st_metadata            metadata_mem_in,
++  input  logic                  metadata_mem_in_valid,
++
++  // Memory controller write
++  output logic                  m_axis_mem_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_mem_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_mem_tkeep,
++  output logic                  m_axis_mem_tlast,
++  input  logic                  m_axis_mem_tready,
++
++  output st_metadata            metadata_mem_out,
++  output logic                  metadata_mem_out_valid
++);
++
++localparam FIFO_DEPTH     = 128;
++localparam FIFO_PTR_WIDTH = $clog2(FIFO_DEPTH);
++localparam NODE_PTR_WIDTH = $clog2(NUM_NODES);
++localparam METADATA_WIDTH = $bits(st_metadata);
++
++typedef enum logic [1:0] {
++  READ,
++  WRITE,
++  READ_RESULT,
++  WRITE_ACK
++} opcode_t;
++
++typedef enum logic [1:0] {
++  ACCEPT_NET,
++  WRITE_MEM,
++  WRITE_REP
++} net_state_t;
++
++typedef enum logic {
++  ACCEPT_MEM,
++  READ_MEM
++} mem_state_t;
++
++net_state_t net_state, net_state_next;
++mem_state_t mem_state, mem_state_next;
++
++// Signals for metadata FIFOs
++logic       net_meta_rd_en;
++logic       net_meta_empty;
++st_metadata net_meta_out;
++
++logic       mem_meta_rd_en;
++logic       mem_meta_empty;
++st_metadata mem_meta_out;
++
++// Signals for packet FIFOs
++logic                  net_fifo_rd_en;
++logic                  net_fifo_empty;
++logic                  net_fifo_prog_full;
++logic [DATA_WIDTH-1:0] net_fifo_out_tdata;
++logic [KEEP_WIDTH-1:0] net_fifo_out_tkeep;
++logic                  net_fifo_out_tlast;
++
++logic                  mem_fifo_rd_en;
++logic                  mem_fifo_empty;
++logic                  mem_fifo_prog_full;
++logic [DATA_WIDTH-1:0] mem_fifo_out_tdata;
++logic [KEEP_WIDTH-1:0] mem_fifo_out_tkeep;
++logic                  mem_fifo_out_tlast;
++
++assign s_axis_tready     = !net_fifo_prog_full;
++assign s_axis_mem_tready = !mem_fifo_prog_full;
++
++// Signals for replicating writes to backup nodes
++typedef struct packed {
++  logic [DATA_WIDTH-1:0] tdata;
++  logic [KEEP_WIDTH-1:0] tkeep;
++  logic                  tlast;
++} st_beat;
++
++st_beat replica_mem [FIFO_DEPTH], replica_mem_next [FIFO_DEPTH];
++logic [FIFO_PTR_WIDTH-1:0] write_ptr, write_ptr_next;
++logic [FIFO_PTR_WIDTH-1:0] read_ptr, read_ptr_next;
++logic [NODE_PTR_WIDTH-1:0] nodes_count, nodes_count_next;
++logic                      metadata_sent, metadata_sent_next;
++
++// Signals for keeping track of replicas' write acks
++typedef struct packed {
++  st_metadata                meta;
++  logic [FIFO_PTR_WIDTH-1:0] id;
++  logic               [31:0] count;
++  logic                      is_running;
++} st_ack;
++
++st_ack ack_table [FIFO_DEPTH], ack_table_next [FIFO_DEPTH];
++logic [FIFO_PTR_WIDTH-1:0] ack_id, ack_id_next;
++
++// Keeps track of which side is using the output interface: 10 incoming packets, 01 memory controller
++logic [1:0] out_busy, out_busy_next;
++
++// Checks whether the node is the leader for given key
++function logic is_leader (input logic [KEY_WIDTH-1:0] key);
++  logic [NODE_PTR_WIDTH-1:0] leader_id;
++  leader_id = key[NODE_PTR_WIDTH-1:0];
++  if (NODES_IPS[leader_id] == NODES_IPS[0])
++    return 1'b1;
++  return 1'b0;
++endfunction
++
++// Returns true if all replicas have replied
++function logic ack_policy (input logic [31:0] id, input st_ack ack_table [FIFO_DEPTH]);
++  if (ack_table[id].count + 1 == NUM_NODES - 1)
++    return 1'b1;
++  return 1'b0;
++endfunction
++
++always_ff @(posedge axis_clk) begin
++  if (!axis_rstn) begin
++    net_state      <= ACCEPT_NET;
++    mem_state      <= ACCEPT_MEM;
++    ack_id         <= '0;
++    read_ptr       <= '0;
++    write_ptr      <= '0;
++    nodes_count    <= '0;
++    metadata_sent  <= '0;
++    out_busy       <= 1'b0;
++    for (int i = 0; i < FIFO_DEPTH; i++) begin
++      ack_table[i]   <= '0;
++      replica_mem[i] <= '0;
++    end
++  end 
++  else begin
++    net_state      <= net_state_next;
++    mem_state      <= mem_state_next;
++    ack_id         <= ack_id_next;
++    read_ptr       <= read_ptr_next;
++    write_ptr      <= write_ptr_next;
++    nodes_count    <= nodes_count_next;
++    metadata_sent  <= metadata_sent_next;
++    out_busy       <= out_busy_next;
++    for (int i = 0; i < FIFO_DEPTH; i++) begin
++      ack_table[i]   <= ack_table_next[i];
++      replica_mem[i] <= replica_mem_next[i];
++    end
++  end
++end
++
++always_comb begin
++  net_state_next = net_state;
++  mem_state_next = mem_state;
++  net_meta_rd_en = 1'b0;
++  net_fifo_rd_en = 1'b0;
++  mem_meta_rd_en = 1'b0;
++  mem_fifo_rd_en = 1'b0;
++
++  ack_id_next        = ack_id;
++  out_busy_next      = out_busy;
++  read_ptr_next      = read_ptr;
++  write_ptr_next     = write_ptr;
++  nodes_count_next   = nodes_count;
++  metadata_sent_next = metadata_sent;
++
++  m_axis_tvalid = 0;
++  m_axis_tdata  = 0;
++  m_axis_tkeep  = 0;
++  m_axis_tlast  = 0;
++
++  metadata_out_valid = 0;
++  metadata_out       = 0;
++
++  m_axis_mem_tvalid = 0;
++  m_axis_mem_tdata  = 0;
++  m_axis_mem_tkeep  = 0;
++  m_axis_mem_tlast  = 0;
++
++  metadata_mem_out_valid = 0;
++  metadata_mem_out       = 0;
++
++  for (int i = 0; i < FIFO_DEPTH; i++) begin
++    replica_mem_next[i] = replica_mem[i];
++    ack_table_next[i]   = ack_table[i];
++  end
++
++  // Process incoming packets
++  case (net_state)
++    ACCEPT_NET: begin
++      if (!net_meta_empty) begin
++        case (net_meta_out.opcode)
++          READ: begin
++            metadata_mem_out_valid = 1'b1;
++            metadata_mem_out       = net_meta_out;
++            net_fifo_rd_en         = 1'b1; 
++            if (m_axis_mem_tready)
++              net_meta_rd_en = 1'b1;
++          end
++          WRITE: begin
++            m_axis_mem_tvalid = !net_fifo_empty;
++            m_axis_mem_tdata  = net_fifo_out_tdata;
++            m_axis_mem_tkeep  = net_fifo_out_tkeep;
++            m_axis_mem_tlast  = net_fifo_out_tlast;
++            net_fifo_rd_en = m_axis_mem_tready;
++
++            metadata_mem_out_valid = 1'b1;
++            metadata_mem_out       = net_meta_out;
++            if (m_axis_mem_tready) begin
++              if (is_leader(net_meta_out.key)) begin
++                net_state_next   = WRITE_REP;
++                read_ptr_next    = 0;
++                write_ptr_next   = 0;
++                nodes_count_next = 0;
++
++                // Save the first beat for replicas
++                if (m_axis_mem_tvalid) begin
++                  replica_mem_next[write_ptr].tdata = net_fifo_out_tdata;
++                  replica_mem_next[write_ptr].tkeep = net_fifo_out_tkeep;
++                  replica_mem_next[write_ptr].tlast = net_fifo_out_tlast;
++                  write_ptr_next = 1;
++                end
++
++                // Start keeping track of acks for this write
++                ack_table_next[ack_id].meta       = net_meta_out;
++                ack_table_next[ack_id].id         = ack_id;
++                ack_table_next[ack_id].count      = 0;
++                ack_table_next[ack_id].is_running = 1'b1;
++                ack_id_next = ack_id + 1;
++              end
++              else begin
++                net_state_next = WRITE_MEM;
++                net_meta_rd_en = 1'b1;
++              end
++            end
++          end
++          WRITE_ACK: begin
++            if (is_leader(net_meta_out.key) && ack_table[net_meta_out.id].is_running) begin
++              if (ack_policy(net_meta_out.id, ack_table)) begin
++                if (!out_busy[1]) begin
++                  out_busy_next[0] = 1'b1;
++                  ack_table_next[net_meta_out.id].is_running = 1'b0;
++
++                  metadata_out_valid  = 1'b1;
++                  metadata_out        = ack_table[net_meta_out.id].meta;
++                  metadata_out.opcode = WRITE_ACK;
++
++                  m_axis_tvalid = 1'b1;
++                  m_axis_tdata  = '0;
++                  m_axis_tkeep  = '0;
++                  m_axis_tlast  = 1'b1;
++
++                  if (m_axis_tready) begin
++                    out_busy_next[0] = 1'b0;
++                    net_meta_rd_en   = 1'b1;
++                    net_fifo_rd_en   = 1'b1; 
++                  end
++                end
++              end
++              else begin
++                ack_table_next[net_meta_out.id].count = ack_table[net_meta_out.id].count + 1;
++                net_meta_rd_en = 1'b1;
++                net_fifo_rd_en = 1'b1; 
++              end
++            end
++            else begin
++              net_meta_rd_en = 1'b1;
++              net_fifo_rd_en = 1'b1; 
++            end
++          end
++          default:;
++        endcase
++      end
++    end
++    WRITE_MEM: begin
++      m_axis_mem_tvalid = !net_fifo_empty;
++      m_axis_mem_tdata  = net_fifo_out_tdata;
++      m_axis_mem_tkeep  = net_fifo_out_tkeep;
++      m_axis_mem_tlast  = net_fifo_out_tlast;
++      net_fifo_rd_en = m_axis_mem_tready;
++      if (m_axis_mem_tvalid && m_axis_mem_tready && m_axis_mem_tlast)
++        net_state_next = ACCEPT_NET;
++    end
++    WRITE_REP: begin
++      // While writing to the first node, also move the write to the memory controller
++      if (nodes_count == 0) begin
++        m_axis_mem_tvalid = !net_fifo_empty;
++        m_axis_mem_tdata  = net_fifo_out_tdata;
++        m_axis_mem_tkeep  = net_fifo_out_tkeep;
++        m_axis_mem_tlast  = net_fifo_out_tlast;
++        net_fifo_rd_en = m_axis_mem_tready;
++
++        if (m_axis_mem_tvalid && m_axis_mem_tready) begin
++          replica_mem_next[write_ptr].tdata = net_fifo_out_tdata;
++          replica_mem_next[write_ptr].tkeep = net_fifo_out_tkeep;
++          replica_mem_next[write_ptr].tlast = net_fifo_out_tlast;
++          write_ptr_next = write_ptr + 1;
++        end
++      end
++
++      if (!out_busy[1]) begin
++        out_busy_next[0] = 1'b1;
++        m_axis_tvalid = 1'b1;
++        m_axis_tdata  = replica_mem[read_ptr].tdata;
++        m_axis_tkeep  = replica_mem[read_ptr].tkeep;
++        m_axis_tlast  = replica_mem[read_ptr].tlast;
++        //FIXME: if memory controller backpressures, beats could be lost
++
++        if (read_ptr == 0) begin
++          metadata_out_valid = 1'b1;
++          metadata_out       = net_meta_out;
++          metadata_out.id    = ack_table[net_meta_out.id].id;
++          metadata_out.ip    = NODES_IPS[nodes_count + 1];
++        end
++
++        if (m_axis_tready) begin
++          read_ptr_next = read_ptr + 1;
++          if (m_axis_tlast) begin
++            if (nodes_count + 1 == NUM_NODES - 1) begin
++              net_state_next   = ACCEPT_NET;
++              net_meta_rd_en   = 1'b1;
++              out_busy_next[0] = 1'b0;
++            end
++            read_ptr_next      = 0;
++            metadata_sent_next = 1'b0;
++            nodes_count_next   = nodes_count + 1;
++          end
++        end
++      end
++    end
++    default:;
++  endcase
++
++  // Process incoming memory controller data
++  if (!out_busy[0] && !out_busy_next[0]) begin
++    case (mem_state)
++      ACCEPT_MEM: begin
++        if (!mem_meta_empty) begin
++          out_busy_next[1] = 1'b1;
++          case (mem_meta_out.opcode)
++            READ: begin
++              m_axis_tvalid = !mem_fifo_empty;
++              m_axis_tdata  = mem_fifo_out_tdata;
++              m_axis_tkeep  = mem_fifo_out_tkeep;
++              m_axis_tlast  = mem_fifo_out_tlast;
++              mem_fifo_rd_en = m_axis_tready;
++
++              metadata_out_valid  = 1'b1;
++              metadata_out        = mem_meta_out;
++              metadata_out.opcode = READ_RESULT;
++
++              if (m_axis_tready) begin
++                mem_state_next = READ_MEM;
++                mem_meta_rd_en = 1'b1;
++              end
++            end
++            WRITE: begin
++              metadata_out_valid  = 1'b1;
++              metadata_out        = mem_meta_out;
++              metadata_out.opcode = WRITE_ACK;
++
++              m_axis_tvalid = 1'b1;
++              m_axis_tdata  = '0;
++              m_axis_tkeep  = '0;
++              m_axis_tlast  = 1'b1;
++
++              if (m_axis_tready) begin
++                out_busy_next[1] = 1'b0;
++                mem_meta_rd_en   = 1'b1;
++              end
++            end
++            default:;
++          endcase
++        end
++      end
++      READ_MEM: begin
++        m_axis_tvalid = !mem_fifo_empty;
++        m_axis_tdata  = mem_fifo_out_tdata;
++        m_axis_tkeep  = mem_fifo_out_tkeep;
++        m_axis_tlast  = mem_fifo_out_tlast;
++        mem_fifo_rd_en = m_axis_tready;
++
++        if (m_axis_tvalid && m_axis_tready && m_axis_tlast) begin
++          out_busy_next[1] = 1'b0;
++          mem_state_next = ACCEPT_MEM;
++        end
++      end
++      default:;
++    endcase
++  end
++end
++
++// FIFO to store input replication packets
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (DATA_WIDTH + KEEP_WIDTH + 1),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (DATA_WIDTH + KEEP_WIDTH + 1)
++) net_fifo (
++  .wr_en               (s_axis_tvalid),
++  .din                 ({s_axis_tdata, s_axis_tkeep, s_axis_tlast}),
++  .wr_ack              (),
++  .rd_en               (net_fifo_rd_en),
++  .data_valid          (),
++  .dout                ({net_fifo_out_tdata, net_fifo_out_tkeep, net_fifo_out_tlast}),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (net_fifo_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (net_fifo_prog_full),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axis_clk),
++  .rst                 (~axis_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++// FIFO to store input replication metadata
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (METADATA_WIDTH),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
++) metadata_fifo (
++  .wr_en               (metadata_in_valid),
++  .din                 (metadata_in),
++  .wr_ack              (),
++  .rd_en               (net_meta_rd_en),
++  .data_valid          (),
++  .dout                (net_meta_out),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (net_meta_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axis_clk),
++  .rst                 (~axis_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++// FIFO to store input memory controller packets
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (DATA_WIDTH + KEEP_WIDTH + 1),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (DATA_WIDTH + KEEP_WIDTH + 1)
++) net_mem_fifo (
++  .wr_en               (s_axis_mem_tvalid),
++  .din                 ({s_axis_mem_tdata, s_axis_mem_tkeep, s_axis_mem_tlast}),
++  .wr_ack              (),
++  .rd_en               (mem_fifo_rd_en),
++  .data_valid          (),
++  .dout                ({mem_fifo_out_tdata, mem_fifo_out_tkeep, mem_fifo_out_tlast}),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (mem_fifo_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (mem_fifo_prog_full),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axis_clk),
++  .rst                 (~axis_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++// FIFO to store input memory controller metadata
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (METADATA_WIDTH),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
++) metadata_mem_fifo (
++  .wr_en               (metadata_mem_in_valid),
++  .din                 (metadata_mem_in),
++  .wr_ack              (),
++  .rd_en               (mem_meta_rd_en),
++  .data_valid          (),
++  .dout                (mem_meta_out),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (mem_meta_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axis_clk),
++  .rst                 (~axis_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++endmodule
+diff --git a/src/hbm_subsystem/vivado_ip/packet_arbiter.tcl b/src/hbm_subsystem/vivado_ip/packet_arbiter.tcl
+new file mode 100644
+index 0000000..227b301
+--- /dev/null
++++ b/src/hbm_subsystem/vivado_ip/packet_arbiter.tcl
+@@ -0,0 +1,12 @@
++create_ip -name axis_switch -vendor xilinx.com -library ip -module_name packet_arbiter -dir ${ip_build_dir}
++set_property -dict { 
++  CONFIG.ARB_ON_MAX_XFERS {0} \
++  CONFIG.ARB_ON_TLAST {1} \
++  CONFIG.HAS_TKEEP {1} \
++  CONFIG.HAS_TLAST {1} \
++  CONFIG.HAS_TSTRB {0} \
++  CONFIG.TDATA_NUM_BYTES {64} \
++  CONFIG.TDEST_WIDTH {0} \
++  CONFIG.TID_WIDTH {0} \
++  CONFIG.TUSER_WIDTH {48} \
++} [get_ips packet_arbiter]
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/vivado_ip/packet_deparser.tcl b/src/hbm_subsystem/vivado_ip/packet_deparser.tcl
+new file mode 100644
+index 0000000..581855e
+--- /dev/null
++++ b/src/hbm_subsystem/vivado_ip/packet_deparser.tcl
+@@ -0,0 +1,19 @@
++set prj_root [file normalize ..]
++set p4_filepath ${prj_root}/src/hbm_subsystem
++
++if {[info exists p4_dir]} {
++  set p4file [glob -directory ${p4_dir} packet_deparser.p4]
++} else {
++  set p4file [glob -directory ${p4_filepath} packet_deparser.p4]
++}
++
++puts "p4file = ${p4file}"
++
++create_ip -name vitis_net_p4 -vendor xilinx.com -library ip -module_name packet_deparser -dir ${ip_build_dir}
++set_property -dict { 
++  CONFIG.AXIS_CLK_FREQ_MHZ {250} \
++  CONFIG.CAM_MEM_CLK_FREQ_MHZ {250} \
++  CONFIG.P4_FILE {${p4file}} \
++  CONFIG.PKT_RATE {250} \
++  CONFIG.TOTAL_LATENCY {22} \
++} [get_ips packet_deparser]
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/vivado_ip/packet_filter.tcl b/src/hbm_subsystem/vivado_ip/packet_filter.tcl
+new file mode 100644
+index 0000000..f7ded3c
+--- /dev/null
++++ b/src/hbm_subsystem/vivado_ip/packet_filter.tcl
+@@ -0,0 +1,11 @@
++create_ip -name axis_switch -vendor xilinx.com -library ip -module_name packet_filter -dir ${ip_build_dir}
++set_property -dict { 
++  CONFIG.HAS_TKEEP {1} \
++  CONFIG.HAS_TLAST {1} \
++  CONFIG.HAS_TSTRB {0} \
++  CONFIG.NUM_SI {1} \
++  CONFIG.TDATA_NUM_BYTES {64} \
++  CONFIG.TDEST_WIDTH {1} \
++  CONFIG.TID_WIDTH {0} \
++  CONFIG.TUSER_WIDTH {48} \
++} [get_ips packet_filter]
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/vivado_ip/packet_parser.tcl b/src/hbm_subsystem/vivado_ip/packet_parser.tcl
+new file mode 100644
+index 0000000..20fd30b
+--- /dev/null
++++ b/src/hbm_subsystem/vivado_ip/packet_parser.tcl
+@@ -0,0 +1,20 @@
++set prj_root [file normalize ..]
++set p4_filepath ${prj_root}/src/hbm_subsystem
++
++if {[info exists p4_dir]} {
++  set p4file [glob -directory ${p4_dir} packet_parser.p4]
++} else {
++  set p4file [glob -directory ${p4_filepath} packet_parser.p4]
++}
++
++puts "p4file = ${p4file}"
++
++create_ip -name vitis_net_p4 -vendor xilinx.com -library ip -module_name packet_parser -dir ${ip_build_dir}
++set_property -dict { 
++  CONFIG.AXIS_CLK_FREQ_MHZ {250} \
++  CONFIG.CAM_MEM_CLK_FREQ_MHZ {250} \
++  CONFIG.JSON_TIMESTAMP {1756741124} \
++  CONFIG.P4_FILE {${p4file}} \
++  CONFIG.PKT_RATE {250} \
++  CONFIG.TOTAL_LATENCY {32} \
++} [get_ips packet_parser]
+diff --git a/src/hbm_subsystem/vivado_ip/vivado_ip.tcl b/src/hbm_subsystem/vivado_ip/vivado_ip.tcl
+new file mode 100644
+index 0000000..8d93e4e
+--- /dev/null
++++ b/src/hbm_subsystem/vivado_ip/vivado_ip.tcl
+@@ -0,0 +1,6 @@
++set ips {
++  packet_arbiter
++  packet_filter
++  packet_parser
++  packet_deparser
++}
+\ No newline at end of file
+diff --git a/src/open_nic_shell.sv b/src/open_nic_shell.sv
+index 572e191..fc1bcec 100644
+--- a/src/open_nic_shell.sv
++++ b/src/open_nic_shell.sv
+@@ -278,7 +278,7 @@ module open_nic_shell #(
+   wire                   [1:0] axil_box1_rresp;
+   wire                         axil_box1_rready;
+ 
+-  // QDMA subsystem interfaces to the box running at 250MHz
++  // QDMA subsystem interfaces to the HBM subsystem
+   wire     [NUM_PHYS_FUNC*NUM_QDMA-1:0] axis_qdma_h2c_tvalid;
+   wire [512*NUM_PHYS_FUNC*NUM_QDMA-1:0] axis_qdma_h2c_tdata;
+   wire  [64*NUM_PHYS_FUNC*NUM_QDMA-1:0] axis_qdma_h2c_tkeep;
+@@ -297,6 +297,25 @@ module open_nic_shell #(
+   wire  [16*NUM_PHYS_FUNC*NUM_QDMA-1:0] axis_qdma_c2h_tuser_dst;
+   wire     [NUM_PHYS_FUNC*NUM_QDMA-1:0] axis_qdma_c2h_tready;
+ 
++  // HBM subsystem interfaces to the box running at 250Mhz
++  wire         axis_hbm_h2c_tvalid;
++  wire [511:0] axis_hbm_h2c_tdata;
++  wire  [63:0] axis_hbm_h2c_tkeep;
++  wire         axis_hbm_h2c_tlast;
++  wire  [15:0] axis_hbm_h2c_tuser_size;
++  wire  [15:0] axis_hbm_h2c_tuser_src;
++  wire  [15:0] axis_hbm_h2c_tuser_dst;
++  wire         axis_hbm_h2c_tready;
++
++  wire         axis_hbm_c2h_tvalid;
++  wire [511:0] axis_hbm_c2h_tdata;
++  wire  [63:0] axis_hbm_c2h_tkeep;
++  wire         axis_hbm_c2h_tlast;
++  wire  [15:0] axis_hbm_c2h_tuser_size;
++  wire  [15:0] axis_hbm_c2h_tuser_src;
++  wire  [15:0] axis_hbm_c2h_tuser_dst;
++  wire         axis_hbm_c2h_tready;
++
+   // Packet adapter interfaces to the box running at 250MHz
+   wire     [NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tvalid;
+   wire [512*NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tdata;
+@@ -807,6 +826,42 @@ module open_nic_shell #(
+     .s_axi_wstrb          (axi_wstrb),
+     .s_axi_wuser          (axi_wuser),
+     .s_axi_wvalid         (axi_wvalid),
++
++    .s_axis_qdma_h2c_tvalid           (axis_qdma_h2c_tvalid),
++    .s_axis_qdma_h2c_tdata            (axis_qdma_h2c_tdata),
++    .s_axis_qdma_h2c_tkeep            (axis_qdma_h2c_tkeep),
++    .s_axis_qdma_h2c_tlast            (axis_qdma_h2c_tlast),
++    .s_axis_qdma_h2c_tuser_size       (axis_qdma_h2c_tuser_size),
++    .s_axis_qdma_h2c_tuser_src        (axis_qdma_h2c_tuser_src),
++    .s_axis_qdma_h2c_tuser_dst        (axis_qdma_h2c_tuser_dst),
++    .s_axis_qdma_h2c_tready           (axis_qdma_h2c_tready),
++
++    .m_axis_qdma_c2h_tvalid           (axis_qdma_c2h_tvalid),
++    .m_axis_qdma_c2h_tdata            (axis_qdma_c2h_tdata),
++    .m_axis_qdma_c2h_tkeep            (axis_qdma_c2h_tkeep),
++    .m_axis_qdma_c2h_tlast            (axis_qdma_c2h_tlast),
++    .m_axis_qdma_c2h_tuser_size       (axis_qdma_c2h_tuser_size),
++    .m_axis_qdma_c2h_tuser_src        (axis_qdma_c2h_tuser_src),
++    .m_axis_qdma_c2h_tuser_dst        (axis_qdma_c2h_tuser_dst),
++    .m_axis_qdma_c2h_tready           (axis_qdma_c2h_tready),
++
++    .m_axis_cmac_h2c_tvalid           (axis_hbm_h2c_tvalid),
++    .m_axis_cmac_h2c_tdata            (axis_hbm_h2c_tdata),
++    .m_axis_cmac_h2c_tkeep            (axis_hbm_h2c_tkeep),
++    .m_axis_cmac_h2c_tlast            (axis_hbm_h2c_tlast),
++    .m_axis_cmac_h2c_tuser_size       (axis_hbm_h2c_tuser_size),
++    .m_axis_cmac_h2c_tuser_src        (axis_hbm_h2c_tuser_src),
++    .m_axis_cmac_h2c_tuser_dst        (axis_hbm_h2c_tuser_dst),
++    .m_axis_cmac_h2c_tready           (axis_hbm_h2c_tready),
++
++    .s_axis_cmac_c2h_tvalid           (axis_hbm_c2h_tvalid),
++    .s_axis_cmac_c2h_tdata            (axis_hbm_c2h_tdata),
++    .s_axis_cmac_c2h_tkeep            (axis_hbm_c2h_tkeep),
++    .s_axis_cmac_c2h_tlast            (axis_hbm_c2h_tlast),
++    .s_axis_cmac_c2h_tuser_size       (axis_hbm_c2h_tuser_size),
++    .s_axis_cmac_c2h_tuser_src        (axis_hbm_c2h_tuser_src),
++    .s_axis_cmac_c2h_tuser_dst        (axis_hbm_c2h_tuser_dst),
++    .s_axis_cmac_c2h_tready           (axis_hbm_c2h_tready),
+     
+     .axi_clk              (axis_aclk),
+     .axi_resetn           (sys_cfg_powerup_rstn),
+@@ -975,23 +1030,23 @@ module open_nic_shell #(
+     .s_axil_rresp                     (axil_box0_rresp),
+     .s_axil_rready                    (axil_box0_rready),
+ 
+-    .s_axis_qdma_h2c_tvalid           (axis_qdma_h2c_tvalid),
+-    .s_axis_qdma_h2c_tdata            (axis_qdma_h2c_tdata),
+-    .s_axis_qdma_h2c_tkeep            (axis_qdma_h2c_tkeep),
+-    .s_axis_qdma_h2c_tlast            (axis_qdma_h2c_tlast),
+-    .s_axis_qdma_h2c_tuser_size       (axis_qdma_h2c_tuser_size),
+-    .s_axis_qdma_h2c_tuser_src        (axis_qdma_h2c_tuser_src),
+-    .s_axis_qdma_h2c_tuser_dst        (axis_qdma_h2c_tuser_dst),
+-    .s_axis_qdma_h2c_tready           (axis_qdma_h2c_tready),
+-
+-    .m_axis_qdma_c2h_tvalid           (axis_qdma_c2h_tvalid),
+-    .m_axis_qdma_c2h_tdata            (axis_qdma_c2h_tdata),
+-    .m_axis_qdma_c2h_tkeep            (axis_qdma_c2h_tkeep),
+-    .m_axis_qdma_c2h_tlast            (axis_qdma_c2h_tlast),
+-    .m_axis_qdma_c2h_tuser_size       (axis_qdma_c2h_tuser_size),
+-    .m_axis_qdma_c2h_tuser_src        (axis_qdma_c2h_tuser_src),
+-    .m_axis_qdma_c2h_tuser_dst        (axis_qdma_c2h_tuser_dst),
+-    .m_axis_qdma_c2h_tready           (axis_qdma_c2h_tready),
++    .s_axis_qdma_h2c_tvalid           (axis_hbm_h2c_tvalid),
++    .s_axis_qdma_h2c_tdata            (axis_hbm_h2c_tdata),
++    .s_axis_qdma_h2c_tkeep            (axis_hbm_h2c_tkeep),
++    .s_axis_qdma_h2c_tlast            (axis_hbm_h2c_tlast),
++    .s_axis_qdma_h2c_tuser_size       (axis_hbm_h2c_tuser_size),
++    .s_axis_qdma_h2c_tuser_src        (axis_hbm_h2c_tuser_src),
++    .s_axis_qdma_h2c_tuser_dst        (axis_hbm_h2c_tuser_dst),
++    .s_axis_qdma_h2c_tready           (axis_hbm_h2c_tready),
++
++    .m_axis_qdma_c2h_tvalid           (axis_hbm_c2h_tvalid),
++    .m_axis_qdma_c2h_tdata            (axis_hbm_c2h_tdata),
++    .m_axis_qdma_c2h_tkeep            (axis_hbm_c2h_tkeep),
++    .m_axis_qdma_c2h_tlast            (axis_hbm_c2h_tlast),
++    .m_axis_qdma_c2h_tuser_size       (axis_hbm_c2h_tuser_size),
++    .m_axis_qdma_c2h_tuser_src        (axis_hbm_c2h_tuser_src),
++    .m_axis_qdma_c2h_tuser_dst        (axis_hbm_c2h_tuser_dst),
++    .m_axis_qdma_c2h_tready           (axis_hbm_c2h_tready),
+ 
+     .m_axis_adap_tx_250mhz_tvalid     (axis_adap_tx_250mhz_tvalid),
+     .m_axis_adap_tx_250mhz_tdata      (axis_adap_tx_250mhz_tdata),
