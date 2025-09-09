@@ -1,16 +1,243 @@
+diff --git a/src/hbm_subsystem/build.tcl b/src/hbm_subsystem/build.tcl
+new file mode 100644
+index 0000000..b50577f
+--- /dev/null
++++ b/src/hbm_subsystem/build.tcl
+@@ -0,0 +1,2 @@
++    read_verilog -quiet [glob -nocomplain -directory $module_dir/memory_controller "*.{v,vh}"]
++    read_verilog -quiet -sv [glob -nocomplain -directory $module_dir/memory_controller "*.sv"]
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/hbm_bd.tcl b/src/hbm_subsystem/hbm_bd.tcl
+index 97fedbc..c4681b4 100644
+--- a/src/hbm_subsystem/hbm_bd.tcl
++++ b/src/hbm_subsystem/hbm_bd.tcl
+@@ -134,6 +134,7 @@ xilinx.com:ip:hbm:1.0\
+ xilinx.com:ip:clk_wiz:6.0\
+ xilinx.com:ip:proc_sys_reset:5.0\
+ xilinx.com:ip:smartconnect:1.0\
++xilinx.com:ip:axi_datamover:5.1\
+ "
+ 
+    set list_ips_missing ""
+@@ -229,15 +230,74 @@ proc create_root_design { parentCell } {
+    CONFIG.WUSER_WIDTH {64} \
+    ] $s_axi_hbm
+ 
++  set s_axis_dm_s2mm [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 s_axis_dm_s2mm ]
++  set_property -dict [ list \
++   CONFIG.FREQ_HZ {250000000} \
++   CONFIG.HAS_TKEEP {1} \
++   CONFIG.HAS_TLAST {1} \
++   CONFIG.HAS_TREADY {1} \
++   CONFIG.HAS_TSTRB {0} \
++   CONFIG.LAYERED_METADATA {undef} \
++   CONFIG.TDATA_NUM_BYTES {64} \
++   CONFIG.TDEST_WIDTH {0} \
++   CONFIG.TID_WIDTH {0} \
++   CONFIG.TUSER_WIDTH {0} \
++   ] $s_axis_dm_s2mm
++
++  set s_axis_dm_s2mm_cmd [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 s_axis_dm_s2mm_cmd ]
++  set_property -dict [ list \
++   CONFIG.FREQ_HZ {250000000} \
++   CONFIG.HAS_TKEEP {0} \
++   CONFIG.HAS_TLAST {0} \
++   CONFIG.HAS_TREADY {1} \
++   CONFIG.HAS_TSTRB {0} \
++   CONFIG.LAYERED_METADATA {undef} \
++   CONFIG.TDATA_NUM_BYTES {10} \
++   CONFIG.TDEST_WIDTH {0} \
++   CONFIG.TID_WIDTH {0} \
++   CONFIG.TUSER_WIDTH {0} \
++   ] $s_axis_dm_s2mm_cmd
++
++  set s_axis_dm_mm2s_cmd [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 s_axis_dm_mm2s_cmd ]
++  set_property -dict [ list \
++   CONFIG.FREQ_HZ {250000000} \
++   CONFIG.HAS_TKEEP {0} \
++   CONFIG.HAS_TLAST {0} \
++   CONFIG.HAS_TREADY {1} \
++   CONFIG.HAS_TSTRB {0} \
++   CONFIG.LAYERED_METADATA {undef} \
++   CONFIG.TDATA_NUM_BYTES {10} \
++   CONFIG.TDEST_WIDTH {0} \
++   CONFIG.TID_WIDTH {0} \
++   CONFIG.TUSER_WIDTH {0} \
++   ] $s_axis_dm_mm2s_cmd
++
++  set m_axis_dm_mm2s [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:axis_rtl:1.0 m_axis_dm_mm2s ]
++  set_property -dict [ list \
++   CONFIG.FREQ_HZ {250000000} \
++   ] $m_axis_dm_mm2s
++
++  set m_axis_dm_s2mm_status [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:axis_rtl:1.0 m_axis_dm_s2mm_status ]
++  set_property -dict [ list \
++   CONFIG.FREQ_HZ {250000000} \
++   ] $m_axis_dm_s2mm_status
++
++  set m_axis_dm_mm2s_status [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:axis_rtl:1.0 m_axis_dm_mm2s_status ]
++  set_property -dict [ list \
++   CONFIG.FREQ_HZ {250000000} \
++   ] $m_axis_dm_mm2s_status
++
+ 
+   # Create ports
+   set axi_resetn [ create_bd_port -dir I axi_resetn ]
+   set hbm_ref_clk [ create_bd_port -dir I -type clk -freq_hz 100000000 hbm_ref_clk ]
+   set axi_clk [ create_bd_port -dir I -type clk -freq_hz 250000000 axi_clk ]
+   set_property -dict [ list \
+-   CONFIG.ASSOCIATED_BUSIF {s_axi_hbm} \
++   CONFIG.ASSOCIATED_BUSIF {s_axi_hbm:s_axis_dm_s2mm:s_axis_dm_s2mm_cmd:s_axis_dm_mm2s_cmd:m_axis_dm_mm2s:m_axis_dm_s2mm_status:m_axis_dm_mm2s_status} \
+    CONFIG.CLK_DOMAIN {hbm_bd_0_0_axi_aclk} \
+  ] $axi_clk
++  set apb_complete_0 [ create_bd_port -dir O apb_complete_0 ]
++  set apb_complete_1 [ create_bd_port -dir O apb_complete_1 ]
+ 
+   # Create instance: hbm_0, and set properties
+   set hbm_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:hbm:1.0 hbm_0 ]
+@@ -262,7 +322,7 @@ proc create_root_design { parentCell } {
+     CONFIG.USER_SAXI_12 {false} \
+     CONFIG.USER_SAXI_13 {false} \
+     CONFIG.USER_SAXI_14 {false} \
+-    CONFIG.USER_SAXI_16 {false} \
++    CONFIG.USER_SAXI_16 {true} \
+     CONFIG.USER_SAXI_17 {false} \
+     CONFIG.USER_SAXI_18 {false} \
+     CONFIG.USER_SAXI_19 {false} \
+@@ -309,14 +369,64 @@ proc create_root_design { parentCell } {
+   ] $smartconnect_0
+ 
+ 
++  # Create instance: axi_datamover_0, and set properties
++  set axi_datamover_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_datamover:5.1 axi_datamover_0 ]
++  set_property -dict [list \
++    CONFIG.c_addr_width {34} \
++    CONFIG.c_dummy {1} \
++    CONFIG.c_m_axi_mm2s_data_width {512} \
++    CONFIG.c_m_axi_s2mm_data_width {512} \
++    CONFIG.c_m_axis_mm2s_tdata_width {512} \
++    CONFIG.c_mm2s_btt_used {23} \
++    CONFIG.c_mm2s_burst_size {64} \
++    CONFIG.c_s2mm_btt_used {23} \
++    CONFIG.c_s2mm_burst_size {64} \
++    CONFIG.c_s_axis_s2mm_tdata_width {512} \
++    CONFIG.c_single_interface {1} \
++  ] $axi_datamover_0
++
++
++  # Create instance: smartconnect_1, and set properties
++  set smartconnect_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_1 ]
++  set_property -dict [list \
++    CONFIG.NUM_MI {1} \
++    CONFIG.NUM_SI {1} \
++  ] $smartconnect_1
++
++
+   # Create interface connections
+   connect_bd_intf_net -intf_net S00_AXI_0_1 [get_bd_intf_ports s_axi_hbm] [get_bd_intf_pins smartconnect_0/S00_AXI]
++  connect_bd_intf_net -intf_net S_AXIS_MM2S_CMD_0_1 [get_bd_intf_ports s_axis_dm_mm2s_cmd] [get_bd_intf_pins axi_datamover_0/S_AXIS_MM2S_CMD]
++  connect_bd_intf_net -intf_net S_AXIS_S2MM_0_1 [get_bd_intf_ports s_axis_dm_s2mm] [get_bd_intf_pins axi_datamover_0/S_AXIS_S2MM]
++  connect_bd_intf_net -intf_net S_AXIS_S2MM_CMD_0_1 [get_bd_intf_ports s_axis_dm_s2mm_cmd] [get_bd_intf_pins axi_datamover_0/S_AXIS_S2MM_CMD]
++  connect_bd_intf_net -intf_net axi_datamover_0_M_AXI [get_bd_intf_pins axi_datamover_0/M_AXI] [get_bd_intf_pins smartconnect_1/S00_AXI]
++  connect_bd_intf_net -intf_net axi_datamover_0_M_AXIS_MM2S [get_bd_intf_ports m_axis_dm_mm2s] [get_bd_intf_pins axi_datamover_0/M_AXIS_MM2S]
++  connect_bd_intf_net -intf_net axi_datamover_0_M_AXIS_MM2S_STS [get_bd_intf_ports m_axis_dm_mm2s_status] [get_bd_intf_pins axi_datamover_0/M_AXIS_MM2S_STS]
++  connect_bd_intf_net -intf_net axi_datamover_0_M_AXIS_S2MM_STS [get_bd_intf_ports m_axis_dm_s2mm_status] [get_bd_intf_pins axi_datamover_0/M_AXIS_S2MM_STS]
+   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_pins smartconnect_0/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_15_8HI]
++  connect_bd_intf_net -intf_net smartconnect_1_M00_AXI [get_bd_intf_pins smartconnect_1/M00_AXI] [get_bd_intf_pins hbm_0/SAXI_16_8HI]
+ 
+   # Create port connections
+   connect_bd_net -net aclk_0_1  [get_bd_ports axi_clk] \
+   [get_bd_pins smartconnect_0/aclk] \
+-  [get_bd_pins hbm_0/AXI_15_ACLK]
++  [get_bd_pins hbm_0/AXI_15_ACLK] \
++  [get_bd_pins smartconnect_1/aclk] \
++  [get_bd_pins axi_datamover_0/m_axi_mm2s_aclk] \
++  [get_bd_pins axi_datamover_0/m_axis_mm2s_cmdsts_aclk] \
++  [get_bd_pins axi_datamover_0/m_axi_s2mm_aclk] \
++  [get_bd_pins axi_datamover_0/m_axis_s2mm_cmdsts_awclk] \
++  [get_bd_pins hbm_0/AXI_16_ACLK]
++  connect_bd_net -net axi_aresetn_0  [get_bd_ports axi_resetn] \
++  [get_bd_pins hbm_0/AXI_15_ARESET_N] \
++  [get_bd_pins smartconnect_0/aresetn] \
++  [get_bd_pins clk_wiz_0/resetn] \
++  [get_bd_pins proc_sys_reset_0/ext_reset_in] \
++  [get_bd_pins hbm_0/AXI_16_ARESET_N] \
++  [get_bd_pins smartconnect_1/aresetn] \
++  [get_bd_pins axi_datamover_0/m_axi_mm2s_aresetn] \
++  [get_bd_pins axi_datamover_0/m_axis_s2mm_cmdsts_aresetn] \
++  [get_bd_pins axi_datamover_0/m_axi_s2mm_aresetn] \
++  [get_bd_pins axi_datamover_0/m_axis_mm2s_cmdsts_aresetn]
+   connect_bd_net -net clk_in1_0_1  [get_bd_ports hbm_ref_clk] \
+   [get_bd_pins clk_wiz_0/clk_in1]
+   connect_bd_net -net clk_wiz_0_clk_out1  [get_bd_pins clk_wiz_0/clk_out1] \
+@@ -327,16 +437,47 @@ proc create_root_design { parentCell } {
+   [get_bd_pins proc_sys_reset_0/slowest_sync_clk]
+   connect_bd_net -net clk_wiz_0_locked  [get_bd_pins clk_wiz_0/locked] \
+   [get_bd_pins proc_sys_reset_0/dcm_locked]
++  connect_bd_net -net hbm_0_apb_complete_0  [get_bd_pins hbm_0/apb_complete_0] \
++  [get_bd_ports apb_complete_0]
++  connect_bd_net -net hbm_0_apb_complete_1  [get_bd_pins hbm_0/apb_complete_1] \
++  [get_bd_ports apb_complete_1]
+   connect_bd_net -net proc_sys_reset_0_peripheral_aresetn  [get_bd_pins proc_sys_reset_0/peripheral_aresetn] \
+   [get_bd_pins hbm_0/APB_0_PRESET_N] \
+   [get_bd_pins hbm_0/APB_1_PRESET_N]
+-  connect_bd_net -net axi_aresetn_0  [get_bd_ports axi_resetn] \
+-  [get_bd_pins hbm_0/AXI_15_ARESET_N] \
+-  [get_bd_pins smartconnect_0/aresetn] \
+-  [get_bd_pins clk_wiz_0/resetn] \
+-  [get_bd_pins proc_sys_reset_0/ext_reset_in]
+ 
+   # Create address segments
++  assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM00] -force
++  assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM01] -force
++  assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM02] -force
++  assign_bd_address -offset 0x60000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM03] -force
++  assign_bd_address -offset 0x80000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM04] -force
++  assign_bd_address -offset 0xA0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM05] -force
++  assign_bd_address -offset 0xC0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM06] -force
++  assign_bd_address -offset 0xE0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM07] -force
++  assign_bd_address -offset 0x000100000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM08] -force
++  assign_bd_address -offset 0x000120000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM09] -force
++  assign_bd_address -offset 0x000140000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM10] -force
++  assign_bd_address -offset 0x000160000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM11] -force
++  assign_bd_address -offset 0x000180000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM12] -force
++  assign_bd_address -offset 0x0001A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM13] -force
++  assign_bd_address -offset 0x0001C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM14] -force
++  assign_bd_address -offset 0x0001E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM15] -force
++  assign_bd_address -offset 0x000200000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM16] -force
++  assign_bd_address -offset 0x000220000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM17] -force
++  assign_bd_address -offset 0x000240000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM18] -force
++  assign_bd_address -offset 0x000260000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM19] -force
++  assign_bd_address -offset 0x000280000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM20] -force
++  assign_bd_address -offset 0x0002A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM21] -force
++  assign_bd_address -offset 0x0002C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM22] -force
++  assign_bd_address -offset 0x0002E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM23] -force
++  assign_bd_address -offset 0x000300000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM24] -force
++  assign_bd_address -offset 0x000320000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM25] -force
++  assign_bd_address -offset 0x000340000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM26] -force
++  assign_bd_address -offset 0x000360000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM27] -force
++  assign_bd_address -offset 0x000380000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM28] -force
++  assign_bd_address -offset 0x0003A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM29] -force
++  assign_bd_address -offset 0x0003C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM30] -force
++  assign_bd_address -offset 0x0003E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM31] -force
+   assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
+   assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
+   assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..b2fa3f7 100644
+index 4571b97..1e2976d 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,8 @@
 -module hbm_subsystem (
 +module hbm_subsystem #(
++  parameter IP_ADDRESS     = 0,
++  parameter MAC_ADDRESS    = 0,
 +  parameter METADATA_WIDTH = 160
 +) (
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
    input    [3:0] s_axi_arcache,
-@@ -40,11 +42,47 @@ module hbm_subsystem (
+@@ -40,11 +44,84 @@ module hbm_subsystem (
    input   [63:0] s_axi_wuser,
    input          s_axi_wvalid,
  
@@ -57,17 +284,91 @@ index 4571b97..b2fa3f7 100644
  );
 -  
 +
++  localparam FIFO_DEPTH = 64;
++
++  logic         axis_dm_write_tvalid;
++  logic [511:0] axis_dm_write_tdata;
++  logic  [63:0] axis_dm_write_tkeep;
++  logic         axis_dm_write_tlast;
++  logic         axis_dm_write_tready;
++
++  logic         axis_dm_read_tvalid;
++  logic [511:0] axis_dm_read_tdata;
++  logic  [63:0] axis_dm_read_tkeep;
++  logic         axis_dm_read_tlast;
++  logic         axis_dm_read_tready;
++
++  logic         axis_dm_write_cmd_tvalid;
++  logic  [79:0] axis_dm_write_cmd_tdata;
++  logic         axis_dm_write_cmd_tready;
++
++  logic         axis_dm_read_cmd_tvalid;
++  logic  [79:0] axis_dm_read_cmd_tdata;
++  logic         axis_dm_read_cmd_tready;
++
++  logic   [7:0] axis_write_sts_tdata;
++  logic         axis_write_sts_tkeep;
++  logic         axis_write_sts_tlast;
++  logic         axis_write_sts_tvalid;
++  logic         axis_write_sts_tready;
++
++  logic   [7:0] axis_read_sts_tdata;
++  logic         axis_read_sts_tkeep;
++  logic         axis_read_sts_tlast;
++  logic         axis_read_sts_tvalid;
++  logic         axis_read_sts_tready;
++
++  logic apb_complete_0;
++  logic apb_complete_1;
++
    hbm_bd_wrapper hbm_inst (
      .s_axi_hbm_araddr                (s_axi_araddr),
      .s_axi_hbm_arburst               (s_axi_arburst),
-@@ -88,7 +126,208 @@ module hbm_subsystem (
+@@ -87,8 +164,400 @@ module hbm_subsystem (
+     .s_axi_hbm_wuser                 (s_axi_wuser),
      .s_axi_hbm_wvalid                (s_axi_wvalid),
  
++    .s_axis_dm_s2mm_tvalid           (axis_dm_write_tvalid),
++    .s_axis_dm_s2mm_tdata            (axis_dm_write_tdata),
++    .s_axis_dm_s2mm_tkeep            (axis_dm_write_tkeep),
++    .s_axis_dm_s2mm_tlast            (axis_dm_write_tlast),
++    .s_axis_dm_s2mm_tready           (axis_dm_write_tready),
++
++    .m_axis_dm_mm2s_tvalid           (axis_dm_read_tvalid),
++    .m_axis_dm_mm2s_tdata            (axis_dm_read_tdata),
++    .m_axis_dm_mm2s_tkeep            (axis_dm_read_tkeep),
++    .m_axis_dm_mm2s_tlast            (axis_dm_read_tlast),
++    .m_axis_dm_mm2s_tready           (axis_dm_read_tready),
++
++    .s_axis_dm_s2mm_cmd_tvalid       (axis_dm_write_cmd_tvalid),
++    .s_axis_dm_s2mm_cmd_tdata        (axis_dm_write_cmd_tdata),
++    .s_axis_dm_s2mm_cmd_tready       (axis_dm_write_cmd_tready),
++
++    .s_axis_dm_mm2s_cmd_tvalid       (axis_dm_read_cmd_tvalid),
++    .s_axis_dm_mm2s_cmd_tdata        (axis_dm_read_cmd_tdata),
++    .s_axis_dm_mm2s_cmd_tready       (axis_dm_read_cmd_tready),
++
++    .m_axis_dm_s2mm_status_tdata     (axis_write_sts_tdata),
++    .m_axis_dm_s2mm_status_tkeep     (axis_write_sts_tkeep),
++    .m_axis_dm_s2mm_status_tlast     (axis_write_sts_tlast),
++    .m_axis_dm_s2mm_status_tvalid    (axis_write_sts_tvalid),
++    .m_axis_dm_s2mm_status_tready    (axis_write_sts_tready),
++
++    .m_axis_dm_mm2s_status_tdata     (axis_read_sts_tdata),
++    .m_axis_dm_mm2s_status_tkeep     (axis_read_sts_tkeep),
++    .m_axis_dm_mm2s_status_tlast     (axis_read_sts_tlast),
++    .m_axis_dm_mm2s_status_tvalid    (axis_read_sts_tvalid),
++    .m_axis_dm_mm2s_status_tready    (axis_read_sts_tready),
++
++    .apb_complete_0                  (apb_complete_0),
++    .apb_complete_1                  (apb_complete_1),
      .axi_clk                         (axi_clk),
 -    .axi_resetn                      (axi_resetn),
-+    .axi_rstn                        (axi_rstn),
++    .axi_resetn                      (axi_rstn),
      .hbm_ref_clk                     (hbm_ref_clk)
    );
+-  endmodule
+\ No newline at end of file
 +
 +  logic                      axis_parser_to_filter_tvalid;
 +  logic              [511:0] axis_parser_to_filter_tdata;
@@ -93,6 +394,30 @@ index 4571b97..b2fa3f7 100644
 +  logic                      axis_deparser_to_arbiter_tlast;
 +  logic                      axis_deparser_to_arbiter_tready;
 +
++  logic                      axis_engine_to_memory_tvalid;
++  logic              [511:0] axis_engine_to_memory_tdata;
++  logic               [63:0] axis_engine_to_memory_tkeep;
++  logic                      axis_engine_to_memory_tlast;
++  logic                      axis_engine_to_memory_tready;
++
++  logic                      axis_memory_to_engine_tvalid;
++  logic              [511:0] axis_memory_to_engine_tdata;
++  logic               [63:0] axis_memory_to_engine_tkeep;
++  logic                      axis_memory_to_engine_tlast;
++  logic                      axis_memory_to_engine_tready;
++
++  logic                      cmac_tuser_write_en;
++  logic                      cmac_tuser_read_en;
++  logic               [47:0] cmac_tuser_out;
++  logic                      cmac_tuser_empty;
++  logic                      cmac_tuser_write_en_toggle;
++
++  logic [METADATA_WIDTH-1:0] mem_metatada_in;
++  logic                      mem_metadata_in_valid;
++
++  logic [METADATA_WIDTH-1:0] mem_metatada_out;
++  logic                      mem_metadata_out_valid;
++
 +  logic [METADATA_WIDTH-1:0] engine_metatada_out;
 +  logic                      engine_metadata_out_valid;
 +
@@ -116,31 +441,88 @@ index 4571b97..b2fa3f7 100644
 +    .metadata_out           (engine_metatada_out),
 +    .metadata_out_valid     (engine_metadata_out_valid),
 +
-+    .s_axis_mem_tvalid      (),
-+    .s_axis_mem_tdata       (),
-+    .s_axis_mem_tkeep       (),
-+    .s_axis_mem_tlast       (),
-+    .s_axis_mem_tready      (),
-+    .metadata_mem_in        (),
-+    .metadata_mem_in_valid  (),
++    .s_axis_mem_tvalid      (axis_memory_to_engine_tvalid),
++    .s_axis_mem_tdata       (axis_memory_to_engine_tdata),
++    .s_axis_mem_tkeep       (axis_memory_to_engine_tkeep),
++    .s_axis_mem_tlast       (axis_memory_to_engine_tlast),
++    .s_axis_mem_tready      (axis_memory_to_engine_tready),
++    .metadata_mem_in        (mem_metatada_in),
++    .metadata_mem_in_valid  (mem_metadata_in_valid),
 +
-+    .m_axis_mem_tvalid      (),
-+    .m_axis_mem_tdata       (),
-+    .m_axis_mem_tkeep       (),
-+    .m_axis_mem_tlast       (),
-+    .m_axis_mem_tready      (),
-+    .metadata_mem_out       (),
-+    .metadata_mem_out_valid (),
++    .m_axis_mem_tvalid      (axis_engine_to_memory_tvalid),
++    .m_axis_mem_tdata       (axis_engine_to_memory_tdata),
++    .m_axis_mem_tkeep       (axis_engine_to_memory_tkeep),
++    .m_axis_mem_tlast       (axis_engine_to_memory_tlast),
++    .m_axis_mem_tready      (axis_engine_to_memory_tready),
++    .metadata_mem_out       (mem_metatada_out),
++    .metadata_mem_out_valid (mem_metadata_out_valid),
 +
 +    .axis_clk               (axi_clk),
 +    .axis_rstn              (axi_rstn)
 +  );
 +
-+  logic [METADATA_WIDTH-1:0] parser_metatada_in;
++  memory_controller memory_controller_inst (
++    .s_axis_tready            (axis_engine_to_memory_tready),
++    .s_axis_tdata             (axis_engine_to_memory_tdata),
++    .s_axis_tkeep             (axis_engine_to_memory_tkeep),
++    .s_axis_tlast             (axis_engine_to_memory_tlast),
++    .s_axis_tvalid            (axis_engine_to_memory_tvalid),
++    .metadata_mem_in          (mem_metadata_out),
++    .metadata_mem_in_valid    (mem_metadata_out_valid),
++
++    .m_axis_tready            (axis_memory_to_engine_tready),
++    .m_axis_tdata             (axis_memory_to_engine_tdata),
++    .m_axis_tkeep             (axis_memory_to_engine_tkeep),
++    .m_axis_tlast             (axis_memory_to_engine_tlast),
++    .m_axis_tvalid            (axis_memory_to_engine_tvalid),
++    .metadata_mem_out         (mem_metadata_in),
++    .metadata_mem_out_valid   (mem_metadata_in_valid),
++
++    .s_dm_axis_tvalid         (axis_dm_read_tvalid),
++    .s_dm_axis_tdata          (axis_dm_read_tdata),
++    .s_dm_axis_tkeep          (axis_dm_read_tkeep),
++    .s_dm_axis_tlast          (axis_dm_read_tlast),
++    .s_dm_axis_tready         (axis_dm_read_tready),
++
++    .m_dm_axis_tvalid         (axis_dm_write_tvalid),
++    .m_dm_axis_tdata          (axis_dm_write_tdata),
++    .m_dm_axis_tkeep          (axis_dm_write_tkeep),
++    .m_dm_axis_tlast          (axis_dm_write_tlast),
++    .m_dm_axis_tready         (axis_dm_write_tready),
++
++    .mm2s_cmd_tvalid          (axis_dm_write_cmd_tvalid),
++    .mm2s_cmd_tdata           (axis_dm_write_cmd_tdata),
++    .mm2s_cmd_tready          (axis_dm_write_cmd_tready),
++
++    .s2mm_cmd_tvalid          (axis_dm_read_cmd_tvalid),
++    .s2mm_cmd_tdata           (axis_dm_read_cmd_tdata),
++    .s2mm_cmd_tready          (axis_dm_read_cmd_tready),
++
++    .s_axis_mm2s_sts_tdata    (axis_write_sts_tdata),
++    .s_axis_mm2s_sts_tkeep    (axis_write_sts_tkeep),
++    .s_axis_mm2s_sts_tlast    (axis_write_sts_tlast),
++    .s_axis_mm2s_sts_tvalid   (axis_write_sts_tvalid),
++    .s_axis_mm2s_sts_tready   (axis_write_sts_tready),
++
++    .s_axis_s2mm_sts_tdata    (axis_read_sts_tdata),
++    .s_axis_s2mm_sts_tkeep    (axis_read_sts_tkeep),
++    .s_axis_s2mm_sts_tlast    (axis_read_sts_tlast),
++    .s_axis_s2mm_sts_tvalid   (axis_read_sts_tvalid),
++    .s_axis_s2mm_sts_tready   (axis_read_sts_tready),
++
++    .abp_complete0            (abp_complete_0),
++    .aclk                     (axi_clk),
++    .aresetn                  (axi_rstn)
++  );
++
++  logic [METADATA_WIDTH-1:0] parser_metadata_in;
 +  logic                      parser_metadata_in_valid;
 +
-+  logic [METADATA_WIDTH-1:0] parser_metatada_out;
++  logic [METADATA_WIDTH-1:0] parser_metadata_out;
 +  logic                      parser_metadata_out_valid;
++
++  logic vitis_net_p4_resetn;
++  assign vitis_net_p4_resetn = axi_rstn && apb_complete_0;
 +
 +  packet_parser packet_parser_inst (
 +    .s_axis_tvalid           (s_axis_cmac_c2h_tvalid), 
@@ -148,7 +530,7 @@ index 4571b97..b2fa3f7 100644
 +    .s_axis_tkeep            (s_axis_cmac_c2h_tkeep), 
 +    .s_axis_tlast            (s_axis_cmac_c2h_tlast), 
 +    .s_axis_tready           (s_axis_cmac_c2h_tready), 
-+    .user_metadata_in        (parser_metatada_in),
++    .user_metadata_in        (parser_metadata_in),
 +    .user_metadata_in_valid  (parser_metadata_in_valid),
 +
 +    .m_axis_tvalid           (axis_parser_to_filter_tvalid), 
@@ -156,29 +538,31 @@ index 4571b97..b2fa3f7 100644
 +    .m_axis_tkeep            (axis_parser_to_filter_tkeep), 
 +    .m_axis_tlast            (axis_parser_to_filter_tlast), 
 +    .m_axis_tready           (axis_parser_to_filter_tready), 
-+    .user_metadata_out       (parser_metatada_out),
++    .user_metadata_out       (parser_metadata_out),
 +    .user_metadata_out_valid (parser_metadata_out_valid),
 +
 +    .s_axis_aclk             (axi_clk),
-+    .s_axis_aresetn          (axi_rstn)
++    .s_axis_aresetn          (vitis_net_p4_resetn)
 +  );
++
++  logic metadata_valid_in_toggle;
 +
 +  // Control the parser's metadata valid in signal
 +  always @(posedge axi_clk) begin
 +    if(~axi_rstn)
 +    begin
-+      set_metadata_valid_in_low <= 1'b1;
++      metadata_valid_in_toggle <= 1'b1;
 +    end
 +    else begin
 +      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && !s_axis_cmac_c2h_tlast) 
-+        set_metadata_valid_in_low <= 1'b0;  
++        metadata_valid_in_toggle <= 1'b0;  
 +      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
-+        set_metadata_valid_in_low <= 1'b1;
++        metadata_valid_in_toggle <= 1'b1;
 +    end
 +  end
 +
 +  assign parser_metadata_in       = '0;
-+  assign parser_metadata_in_valid = set_metadata_valid_in_low && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
++  assign parser_metadata_in_valid = metadata_valid_in_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
 +
 +  packet_deparser packet_deparser_inst (
 +    .s_axis_tvalid           (axis_engine_to_deparser_tvalid), 
@@ -186,7 +570,7 @@ index 4571b97..b2fa3f7 100644
 +    .s_axis_tkeep            (axis_engine_to_deparser_tkeep), 
 +    .s_axis_tlast            (axis_engine_to_deparser_tlast), 
 +    .s_axis_tready           (axis_engine_to_deparser_tready), 
-+    .user_metadata_in        (engine_metatada_out),
++    .user_metadata_in        ({engine_metatada_out, IP_ADDRESS, MAC_ADDRESS}),
 +    .user_metadata_in_valid  (engine_metadata_out_valid),
 +
 +    .m_axis_tvalid           (axis_deparser_to_arbiter_tvalid), 
@@ -198,12 +582,27 @@ index 4571b97..b2fa3f7 100644
 +    .user_metadata_out_valid (),
 +
 +    .s_axis_aclk             (axi_clk),
-+    .s_axis_aresetn          (axi_rstn)
++    .s_axis_aresetn          (vitis_net_p4_resetn)
 +  );
 +
-+  // TODO: Buffer is_replication for duration of packet transfer
++  // Buffer the switch for the packet filter
 +  logic is_replication;
-+  assign is_replication = metadata_out[METADATA_WIDTH-1];
++  logic is_replication_buf;
++
++  always @(posedge axi_clk) begin
++    if(~axi_rstn)
++    begin
++      is_replication_buf <= 1'b0;
++    end
++    else begin
++      if (parser_metadata_out_valid) 
++        is_replication_buf <= parser_metadata_out[METADATA_WIDTH-1];
++      else
++        is_replication_buf <= is_replication_buf;
++    end
++  end
++
++  assign is_replication = parser_metadata_out_valid ? parser_metadata_out[METADATA_WIDTH-1] : is_replication_buf;
 +
 +  logic    [1:0] axis_filter_out_tvalid;
 +  logic [1023:0] axis_filter_out_tdata;
@@ -218,7 +617,7 @@ index 4571b97..b2fa3f7 100644
 +    .s_axis_tdata            (axis_parser_to_filter_tdata),
 +    .s_axis_tkeep            (axis_parser_to_filter_tkeep),
 +    .s_axis_tlast            (axis_parser_to_filter_tlast),
-+    .s_axis_tuser            (),
++    .s_axis_tuser            (cmac_tuser_out),
 +    .s_axis_tdest            (is_replication),
 +    .s_axis_tready           (axis_parser_to_filter_tready),
 +
@@ -239,9 +638,9 @@ index 4571b97..b2fa3f7 100644
 +  assign m_axis_qdma_c2h_tdata        = axis_filter_out_tdata[511:0];
 +  assign m_axis_qdma_c2h_tkeep        = axis_filter_out_tkeep[63:0];
 +  assign m_axis_qdma_c2h_tlast        = axis_filter_out_tlast[0];
-+  assign m_axis_qdma_c2h_tuser_size   = '0;
-+  assign m_axis_qdma_c2h_tuser_src    = '0;
-+  assign m_axis_qdma_c2h_tuser_dst    = '0;
++  assign m_axis_qdma_c2h_tuser_size   = axis_filter_out_tuser[47-:16];
++  assign m_axis_qdma_c2h_tuser_src    = axis_filter_out_tuser[31-:16];
++  assign m_axis_qdma_c2h_tuser_dst    = axis_filter_out_tuser[15-:16];
 +  assign axis_filter_out_tready[0]    = m_axis_qdma_c2h_tready;
 +
 +  assign axis_filter_to_engine_tvalid = axis_filter_out_tvalid[1];
@@ -250,13 +649,16 @@ index 4571b97..b2fa3f7 100644
 +  assign axis_filter_to_engine_tlast  = axis_filter_out_tlast[1];
 +  assign axis_filter_out_tready[1]    = axis_filter_to_engine_tready;
 +
++  logic replication_tuser;
++  assign replication_tuser = {16'h0, 16'h0, 16'h0040};
++
 +  packet_arbiter packet_arbiter_inst (
-+    .s_axis_tvalid           ({axis_parser_to_filter_tvalid, s_axis_qdma_h2c_tvalid}), 
-+    .s_axis_tdata            ({axis_parser_to_filter_tdata, s_axis_qdma_h2c_tdata}),
-+    .s_axis_tkeep            ({axis_parser_to_filter_tkeep, s_axis_qdma_h2c_tkeep}),
-+    .s_axis_tlast            ({axis_parser_to_filter_tlast, s_axis_qdma_h2c_tlast}),
-+    .s_axis_tuser            ('0),
-+    .s_axis_tready           ({axis_parser_to_filter_tready, s_axis_qdma_h2c_tready}),
++    .s_axis_tvalid           ({axis_deparser_to_arbiter_tvalid, s_axis_qdma_h2c_tvalid}), 
++    .s_axis_tdata            ({axis_deparser_to_arbiter_tdata, s_axis_qdma_h2c_tdata}),
++    .s_axis_tkeep            ({axis_deparser_to_arbiter_tkeep, s_axis_qdma_h2c_tkeep}),
++    .s_axis_tlast            ({axis_deparser_to_arbiter_tlast, s_axis_qdma_h2c_tlast}),
++    .s_axis_tuser            ({replication_tuser, {s_axis_qdma_h2c_tuser_size, s_axis_qdma_h2c_tuser_src, s_axis_qdma_h2c_tuser_dst}}),
++    .s_axis_tready           ({axis_deparser_to_arbiter_tready, s_axis_qdma_h2c_tready}),
 +
 +    .m_axis_tvalid           (m_axis_cmac_h2c_tvalid),
 +    .m_axis_tdata            (m_axis_cmac_h2c_tdata),
@@ -269,7 +671,1095 @@ index 4571b97..b2fa3f7 100644
 +    .aresetn                 (axi_rstn)
 +  );
 +
-   endmodule
++  // FIFO to buffer input tuser data from CMAC
++  xpm_fifo_sync #(
++    .DOUT_RESET_VALUE    ("0"),
++    .ECC_MODE            ("no_ecc"),
++    .FIFO_MEMORY_TYPE    ("auto"),
++    .FIFO_READ_LATENCY   (1),
++    .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++    .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++    .READ_DATA_WIDTH     (48),
++    .READ_MODE           ("fwft"),
++    .WRITE_DATA_WIDTH    (48)
++  ) metadata_fifo (
++    .wr_en               (cmac_tuser_write_en),
++    .din                 ({s_axis_cmac_c2h_tuser_dst, s_axis_cmac_c2h_tuser_src, s_axis_cmac_c2h_tuser_size}),
++    .wr_ack              (),
++    .rd_en               (cmac_tuser_read_en),
++    .data_valid          (),
++    .dout                (cmac_tuser_out),
++    .wr_data_count       (),
++    .rd_data_count       (),
++    .empty               (cmac_tuser_empty),
++    .full                (),
++    .almost_empty        (),
++    .almost_full         (),
++    .overflow            (),
++    .underflow           (),
++    .prog_empty          (),
++    .prog_full           (),
++    .sleep               (1'b0),
++    .sbiterr             (),
++    .dbiterr             (),
++    .injectsbiterr       (1'b0),
++    .injectdbiterr       (1'b0),
++    .wr_clk              (axi_clk),
++    .rst                 (~axi_rstn),
++    .rd_rst_busy         (),
++    .wr_rst_busy         ()
++  );
++
++  // Control the tuser FIFO signals
++  always @(posedge axi_clk) begin
++    if(~axi_rstn)
++    begin
++      cmac_tuser_write_en_toggle <= 1'b0;
++    end
++    else begin
++      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && !s_axis_cmac_c2h_tlast) 
++        cmac_tuser_write_en_toggle <= 1'b0;  
++      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
++        cmac_tuser_write_en_toggle <= 1'b1;
++    end
++  end
++
++  assign cmac_tuser_write_en = cmac_tuser_write_en_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
++  assign cmac_tuser_read_en  = axis_parser_to_filter_tlast && axis_parser_to_filter_tvalid && axis_parser_to_filter_tready;
++
++endmodule
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/memory_controller/memory_controller.sv b/src/hbm_subsystem/memory_controller/memory_controller.sv
+new file mode 100644
+index 0000000..8641504
+--- /dev/null
++++ b/src/hbm_subsystem/memory_controller/memory_controller.sv
+@@ -0,0 +1,762 @@
++`timescale 1ns / 1ps
++//////////////////////////////////////////////////////////////////////////////////
++// Company: 
++// Engineer: 
++// 
++// Create Date: 09/01/2025 10:21:43 AM
++// Design Name: 
++// Module Name: Memory_Controller
++// Project Name: 
++// Target Devices: 
++// Tool Versions: 
++// Description: 
++// 
++// Dependencies: 
++// 
++// Revision: 
++// Revision 0.02 - File Created  
++// Additional Comments: 
++// 
++//////////////////////////////////////////////////////////////////////////////////
++
++module memory_controller #(
++    parameter  int CMD_WIDTH         = 80,
++    parameter  int CMD_STATUS_WIDTH  = 8,
++    parameter  int DATA_WIDTH        = 512,
++    parameter  int TKEEP_WIDTH       = DATA_WIDTH/8,
++    parameter  int TUSER_WIDTH       = 16,
++    parameter  int CMD_FIFO_DEPTH    = 32,
++    parameter  int STREAM_FIFO_DEPTH = 64,
++    parameter  int KEY_WIDTH         = 64,
++    localparam int HASH_WIDTH        = 34
++)(
++    
++    // 250Mhz Memory Controller Clock & Reset.
++    input logic                         aclk,
++    input logic                         aresetn,
++    
++    // HBM Stack Interface complete (FSM Starters)
++    input logic                         abp_complete0,
++    input logic                         abp_complete1,
++
++    // Master AXI-Stream signals [To Replication Engine]
++    input  logic                        m_axis_tready,
++    output logic [DATA_WIDTH-1:0]       m_axis_tdata,
++    output logic [TKEEP_WIDTH-1:0]      m_axis_tkeep,
++    output logic                        m_axis_tlast,
++    output logic                        m_axis_tvalid,
++    output logic [TUSER_WIDTH-1:0]      m_axis_tuser_size,
++    output logic [TUSER_WIDTH-1:0]      m_axis_tuser_src,
++    output logic [TUSER_WIDTH-1:0]      m_axis_tuser_dst,
++
++    // Master AXI-Stream signals [From DataMover]
++    output logic                        s_dm_axis_tready,
++    input  logic [DATA_WIDTH-1:0]       s_dm_axis_tdata,
++    input  logic [TKEEP_WIDTH-1:0]      s_dm_axis_tkeep,
++    input  logic                        s_dm_axis_tlast,
++    input  logic                        s_dm_axis_tvalid,
++
++    // Slave AXI-Stream signals [From Replication Engine]
++    output logic                        s_axis_tready,
++    input  logic [DATA_WIDTH-1:0]       s_axis_tdata,
++    input  logic [TKEEP_WIDTH-1:0]      s_axis_tkeep,
++    input  logic                        s_axis_tlast,
++    input  logic                        s_axis_tvalid,
++    input  logic [TUSER_WIDTH-1:0]      s_axis_tuser_size,
++    input  logic [TUSER_WIDTH-1:0]      s_axis_tuser_src,
++    input  logic [TUSER_WIDTH-1:0]      s_axis_tuser_dst,
++
++    // Slave AXI-Stream signals [To DataMover]
++    input  logic                        m_dm_axis_tready,
++    output logic [DATA_WIDTH-1:0]       m_dm_axis_tdata,
++    output logic [TKEEP_WIDTH-1:0]      m_dm_axis_tkeep,
++    output logic                        m_dm_axis_tlast,
++    output logic                        m_dm_axis_tvalid,
++    
++    // Metadata mem_in
++    input  st_metadata                  metadata_mem_in,
++    input  logic                        metadata_mem_in_valid,
++
++    // Metadata mem_out
++    output st_metadata                  metadata_mem_out,
++    output logic                        metadata_mem_out_valid,
++
++    // MM2S Commands
++    input  logic                        mm2s_cmd_tready,
++    output logic [CMD_WIDTH-1:0]        mm2s_cmd_tdata,
++    output logic                        mm2s_cmd_tvalid,
++
++    // S2MM Commands
++    input  logic                        s2mm_cmd_tready,
++    output logic [CMD_WIDTH-1:0]        s2mm_cmd_tdata,
++    output logic                        s2mm_cmd_tvalid,
++
++    // MM2S Status
++    input  logic [CMD_STATUS_WIDTH-1:0] s_axis_mm2s_sts_tdata,
++    input  logic                        s_axis_mm2s_sts_tkeep,
++    input  logic                        s_axis_mm2s_sts_tlast,
++    input  logic                        s_axis_mm2s_sts_tvalid,
++    output logic                        s_axis_mm2s_sts_tready,
++
++    // S2MM Status
++    input  logic [CMD_STATUS_WIDTH-1:0] s_axis_s2mm_sts_tdata,
++    input  logic                        s_axis_s2mm_sts_tkeep,
++    input  logic                        s_axis_s2mm_sts_tlast,
++    input  logic                        s_axis_s2mm_sts_tvalid,
++    output logic                        s_axis_s2mm_sts_tready
++
++    );
++
++
++    // BTT
++    localparam logic [22:0] BTT = 23'h440;
++
++
++    //////////////////////////////////////////////////////////////////
++    // Hash Mechanism
++    //////////////////////////////////////////////////////////////////
++
++    // Precomputed pseudo-random 34-bit constants
++    localparam logic [HASH_WIDTH-1:0] HASH_MATRIX [KEY_WIDTH-1:0] = '{
++    34'h02A3C5D1, 34'h1BD4F921, 34'h0C98B337, 34'h12345678,
++    34'h3DEAD00F, 34'h2BADC0DE, 34'h1555AAAA, 34'h0FACE123,
++    34'h01F23456, 34'h02BEEF12, 34'h0C0FFEE0, 34'h01BADB07,
++    34'h3ABCDEF0, 34'h2ABCDE12, 34'h134679BD, 34'h2E2468AC,
++    34'h01AAAAAA, 34'h02BBBBBB, 34'h03CCCCCC, 34'h01234567,
++    34'h07654321, 34'h0FEDCBA9, 34'h0ACEACE0, 34'h0C001D00,
++    34'h3DEADC0D, 34'h1BADD00D, 34'h0C0DEC0D, 34'h2BADCAFE,
++    34'h013579BF, 34'h02468ACE, 34'h03579BDF, 34'h0468ACED,
++    34'h0555AAAA, 34'h0666BBBB, 34'h0777CCCC, 34'h0888DDDD,
++    34'h0999EEEE, 34'h0AAAFFFF, 34'h0BBBB111, 34'h0CCCC222,
++    34'h0DDDD333, 34'h0EEEE444, 34'h0FFFF555, 34'h01111222,
++    34'h02222333, 34'h03333444, 34'h04444555, 34'h05555666,
++    34'h06666777, 34'h07777888, 34'h08888999, 34'h09999AAA,
++    34'h0AAAA111, 34'h0BBBB222, 34'h0CCCC333, 34'h0DDDD444,
++    34'h0EEEE555, 34'h0FFFF666, 34'h012345AB, 34'h0FEDC123,
++    34'h034567CD, 34'h056789EF, 34'h0789AB12, 34'h09BCDEF3
++  };
++
++    //Hash function
++    function automatic logic [HASH_WIDTH-1:0] hash (
++        input logic  [KEY_WIDTH-1:0] key,
++        input logic [HASH_WIDTH-1:0] matrix [KEY_WIDTH-1:0]
++    );
++        logic [HASH_WIDTH-1:0] accumulator = '0;
++        for (int i = 0; i < KEY_WIDTH; i = i + 1)
++            if (key[i])
++                accumulator ^= matrix[i];
++        return accumulator;
++    endfunction
++
++    //////////////////////////////////////////////////////////////////
++    // Metadata Buffers
++    //////////////////////////////////////////////////////////////////
++
++    // Global Metadata Buffer signals
++    st_metadata metadata_tdata_buff;
++    logic       metadata_tvalid_buff;
++    logic       metadata_tready_buff;
++
++    metadata_buffer #(
++        .DEPTH(CMD_FIFO_DEPTH)
++    ) metadata_in_buffer (
++        .aclk               (aclk),
++        .aresetn            (aresetn),
++
++        .s_valid            (metadata_mem_in_valid),
++        .s_data             (metadata_mem_in),
++
++        .m_valid            (metadata_tvalid_buff),
++        .m_data             (metadata_tdata_buff),
++        .m_ready            (metadata_tready_buff)
++    );
++
++    // Write Metadata Buffer signals
++    st_metadata s2mm_wr_meta_tdata;
++    logic       s2mm_wr_meta_tvalid;
++
++    st_metadata s2mm_rd_meta_tdata;
++    logic       s2mm_rd_meta_tvalid;
++    logic       s2mm_rd_meta_tready;
++
++    metadata_buffer #(
++        .DEPTH(CMD_FIFO_DEPTH/2)
++    ) wr_metadata_buffer (
++        .aclk               (aclk),
++        .aresetn            (aresetn),
++
++        .s_valid            (s2mm_wr_meta_tvalid),
++        .s_data             (s2mm_wr_meta_tdata),
++
++        .m_valid            (s2mm_rd_meta_tvalid),
++        .m_data             (s2mm_rd_meta_tdata),
++        .m_ready            (s2mm_rd_meta_tready)
++    );
++
++    // Read Metadata Buffer signals
++    st_metadata mm2s_wr_meta_tdata;
++    logic       mm2s_wr_meta_tvalid;
++
++    st_metadata mm2s_rd_meta_tdata;
++    logic       mm2s_rd_meta_tvalid;
++    logic       mm2s_rd_meta_tready;
++
++    metadata_buffer #(
++        .DEPTH(CMD_FIFO_DEPTH/2)
++    ) rd_metadata_buffer (
++        .aclk               (aclk),
++        .aresetn            (aresetn),
++
++        .s_valid            (mm2s_wr_meta_tvalid),
++        .s_data             (mm2s_wr_meta_tdata),
++
++        .m_valid            (mm2s_rd_meta_tvalid),
++        .m_data             (mm2s_rd_meta_tdata),
++        .m_ready            (mm2s_rd_meta_tready)
++    );
++
++    //////////////////////////////////////////////////////////////////
++    // AXI-Stream Buffer [Write]
++    //////////////////////////////////////////////////////////////////
++
++    // Stream Buffer signals
++    logic [DATA_WIDTH-1:0]  s_tdata_buff;
++    logic [TKEEP_WIDTH-1:0] s_tkeep_buff;
++    logic                   s_tvalid_buff;
++    logic                   s_tlast_buff;
++    logic                   s_tready_buff;
++
++    stream_buffer #(
++        .DATA_WIDTH (DATA_WIDTH),
++        .KEEP_WIDTH (TKEEP_WIDTH),
++        .DEPTH      (STREAM_FIFO_DEPTH)
++    ) s2mm_stream_buffer_inst (
++        .aclk               (aclk),
++        .aresetn            (aresetn),
++        //Slave
++        .s_axis_tdata       (s_axis_tdata),
++        .s_axis_tkeep       (s_axis_tkeep),
++        .s_axis_tvalid      (s_axis_tvalid),
++        .s_axis_tlast       (s_axis_tlast),
++        .s_axis_tready      (s_axis_tready),
++        //Master
++        .m_axis_tdata       (s_tdata_buff),
++        .m_axis_tkeep       (s_tkeep_buff),
++        .m_axis_tvalid      (s_tvalid_buff),
++        .m_axis_tlast       (s_tlast_buff),
++        .m_axis_tready      (s_tready_buff)
++    );
++
++    //////////////////////////////////////////////////////////////////
++    // Synchronization [Write]
++    //////////////////////////////////////////////////////////////////
++
++    // Synchronizer signals
++    logic command_sent;
++    logic stream_sent;
++    logic stream_enable;
++
++    synchronizer #(
++        .N(16)
++    ) synchronizer_inst (
++        .aclk               (aclk),
++        .aresetn            (aresetn),
++
++        .s2mm_cmd_start     (abp_complete0),
++
++        .command_sent       (command_sent),
++        .stream_sent        (stream_sent),
++        .stream_enable      (stream_enable)
++    );
++
++    //////////////////////////////////////////////////////////////////
++    // AXI-Stream Buffer [Write Ack]
++    //////////////////////////////////////////////////////////////////
++
++    // Ack Stream Buffer signals
++    logic [DATA_WIDTH-1:0]  s_ack_tdata_buff;
++    logic [TKEEP_WIDTH-1:0] s_ack_tkeep_buff;
++    logic                   s_ack_tvalid_buff;
++    logic                   s_ack_tlast_buff;
++    logic                   s_ack_tready_buff;
++
++    logic [DATA_WIDTH-1:0]  m_ack_tdata_buff;
++    logic [TKEEP_WIDTH-1:0] m_ack_tkeep_buff;
++    logic                   m_ack_tvalid_buff;
++    logic                   m_ack_tlast_buff;
++    logic                   m_ack_tready_buff;
++
++    stream_buffer #(
++        .DATA_WIDTH (DATA_WIDTH),
++        .KEEP_WIDTH (TKEEP_WIDTH),
++        .DEPTH      (STREAM_FIFO_DEPTH/2)
++    ) writeack_stream_buffer_inst (
++        .aclk               (aclk),
++        .aresetn            (aresetn),
++        //Slave
++        .s_axis_tdata       (s_ack_tdata_buff),
++        .s_axis_tkeep       (s_ack_tkeep_buff),
++        .s_axis_tvalid      (s_ack_tvalid_buff),
++        .s_axis_tlast       (s_ack_tlast_buff),
++        .s_axis_tready      (s_ack_tready_buff),
++        //Master
++        .m_axis_tdata       (m_ack_tdata_buff),
++        .m_axis_tkeep       (m_ack_tkeep_buff),
++        .m_axis_tvalid      (m_ack_tvalid_buff),
++        .m_axis_tlast       (m_ack_tlast_buff),
++        .m_axis_tready      (m_ack_tready_buff)
++    );
++
++    //////////////////////////////////////////////////////////////////
++    // AXI-Stream Buffer [Read]
++    //////////////////////////////////////////////////////////////////
++
++    // Stream Buffer signals
++    logic [DATA_WIDTH-1:0]  m_tdata_buff;
++    logic [TKEEP_WIDTH-1:0] m_tkeep_buff;
++    logic                   m_tvalid_buff;
++    logic                   m_tlast_buff;
++    logic                   m_tready_buff;
++
++    stream_buffer #(
++        .DATA_WIDTH (DATA_WIDTH),
++        .KEEP_WIDTH (TKEEP_WIDTH),
++        .DEPTH      (STREAM_FIFO_DEPTH*2)
++    ) mm2s_stream_buffer_inst (
++        .aclk             (aclk),
++        .aresetn          (aresetn),
++        //Slave
++        .s_axis_tdata     (s_dm_axis_tdata),
++        .s_axis_tkeep     (s_dm_axis_tkeep),
++        .s_axis_tvalid    (s_dm_axis_tvalid),
++        .s_axis_tlast     (s_dm_axis_tlast),
++        .s_axis_tready    (s_dm_axis_tready),
++        //Master
++        .m_axis_tdata     (m_tdata_buff),
++        .m_axis_tkeep     (m_tkeep_buff),
++        .m_axis_tvalid    (m_tvalid_buff),
++        .m_axis_tlast     (m_tlast_buff),
++        .m_axis_tready    (m_tready_buff)
++    );
++
++    //////////////////////////////////////////////////////////////////
++    // Controller state machine S2MM & MM2S
++    //////////////////////////////////////////////////////////////////
++
++    //******************************************
++    //        Memory Mapped Command FSM
++    //******************************************
++
++    typedef enum logic [1:0] {
++        READ,
++        WRITE,
++        READ_RESULT,
++        WRITE_ACK
++    } opcode_t;
++
++    // Command FSM states
++    typedef enum {C_IDLE,C_START,C_VALID,C_READY} state_c;
++    
++    state_c cmd_reg, cmd_next;
++    
++    logic [33:0] cmd_address;
++
++    always_ff @(posedge aclk or negedge aresetn) begin
++    if (!aresetn) begin // Boot up the FSM.
++        cmd_reg         <= C_IDLE;
++    end else begin
++        cmd_reg         <= cmd_next;
++    end
++    end
++
++    // Memory Mapped Command FSM
++    always_comb begin
++        cmd_next = cmd_reg;
++
++        metadata_tready_buff = 1'b0;
++        
++        command_sent = 1'b0;
++        cmd_address = '0;
++
++        // MM2S
++        mm2s_cmd_tdata = '0;
++        mm2s_cmd_tvalid = 1'b0;
++
++        mm2s_wr_meta_tdata = '0;
++        mm2s_wr_meta_tvalid = 1'b0;
++
++        // S2MM
++        s2mm_cmd_tdata = '0;
++        s2mm_cmd_tvalid = 1'b0;
++
++        s2mm_wr_meta_tdata = '0;
++        s2mm_wr_meta_tvalid = 1'b0;
++
++        // Ack Stream signals
++        s_ack_tdata_buff = '0;
++        s_ack_tkeep_buff = '0;
++        s_ack_tvalid_buff = 1'b0;
++        s_ack_tlast_buff = 1'b0;
++
++        case(cmd_reg)
++
++        //CMD IDLE state
++        C_IDLE: begin 
++            if(abp_complete0)
++                cmd_next = C_START;
++            else
++                cmd_next = C_IDLE;
++        end
++
++        //CMD START state
++        C_START: begin 
++            cmd_next = C_VALID;
++        end
++
++        //CMD VALID state
++        C_VALID: begin
++            if(metadata_tvalid_buff) //**SLAVE-SIDE.
++                cmd_next = C_READY;
++            else
++                cmd_next = C_VALID;
++        end
++
++        //CMD READY state
++        C_READY: begin
++            metadata_tready_buff = 1'b1;
++            cmd_address = hash(metadata_tdata_buff.key, HASH_MATRIX);
++
++            case (metadata_tdata_buff.opcode)
++                8'h00: begin
++                    if(mm2s_cmd_tready) begin  //**MASTER-SIDE.
++                        mm2s_wr_meta_tvalid = 1'b1;
++                        mm2s_wr_meta_tdata = metadata_tdata_buff;
++                        mm2s_cmd_tvalid = 1'b1;
++                        mm2s_cmd_tdata = {8'h00, 6'b0,cmd_address ,1'b0,1'b1,6'b000000,1'b1,BTT};
++                        cmd_next = C_VALID;                    
++                    end
++                end 
++                8'h01: begin
++                    if(s2mm_cmd_tready && s_ack_tready_buff)begin  //**MASTER-SIDE. 
++                        s2mm_wr_meta_tvalid = 1'b1;
++                        s2mm_wr_meta_tdata = metadata_tdata_buff; 
++                        s2mm_cmd_tvalid = 1'b1;    
++                        s2mm_cmd_tdata = {8'h00, 6'b0,cmd_address ,1'b0,1'b1,6'b000000,1'b1,BTT};  
++                        command_sent = 1'b1;
++                        s_ack_tdata_buff = '1;
++                        s_ack_tkeep_buff = '1;
++                        s_ack_tvalid_buff = 1'b1;
++                        s_ack_tlast_buff = 1'b1;
++                        cmd_next = C_VALID;
++                    end
++                end
++            endcase
++
++
++        end
++
++        endcase
++    end
++
++    //************************************************
++    //             AXI-Stream FSM [Write]
++    //************************************************
++
++    // S2MM FSM states
++    typedef enum {S2MM_IDLE,S2MM_START,S2MM_VALID,S2MM_READY} state_t;
++    
++    state_t s2mm_reg, s2mm_next; 
++
++    always_ff@(posedge aclk, negedge aresetn) begin
++        if(!aresetn) // Boot up the FSM.
++            s2mm_reg <= S2MM_IDLE;
++        else 
++            s2mm_reg <= s2mm_next; 
++    end
++
++    // Axi Stream FSM [Write]
++    always_comb begin
++        
++        s2mm_next = s2mm_reg;
++
++        s_tready_buff = 1'b0;
++
++        m_dm_axis_tvalid = 1'b0;
++        m_dm_axis_tdata = '0;
++        m_dm_axis_tkeep = '0;
++        m_dm_axis_tlast = 1'b0;
++
++        stream_sent = 1'b0;
++        
++        case(s2mm_reg)
++
++        //AXI IDLE state
++        S2MM_IDLE: begin 
++            if(abp_complete0)
++                s2mm_next = S2MM_START;
++            else
++                s2mm_next = S2MM_IDLE;
++        end
++
++        //AXI START state
++        S2MM_START: begin 
++            if(stream_enable) begin
++                s2mm_next = S2MM_VALID;
++            end
++            else
++                s2mm_next = S2MM_START;
++        end
++
++        //AXI VALID state
++        S2MM_VALID: begin
++            if(s_tvalid_buff && stream_enable) //**SLAVE-SIDE.
++                s2mm_next = S2MM_READY;
++            else
++                s2mm_next = S2MM_VALID;
++        end
++
++        //AXI READY state
++        S2MM_READY: begin
++            if(s_tvalid_buff && m_dm_axis_tready) begin //**MASTER-SIDE.
++                s_tready_buff = 1'b1;
++                m_dm_axis_tvalid = s_tvalid_buff;
++                m_dm_axis_tdata = s_tdata_buff;
++                m_dm_axis_tkeep = s_tkeep_buff;
++                m_dm_axis_tlast = s_tlast_buff;
++                if(s_tlast_buff) begin
++                    s2mm_next = S2MM_VALID;
++                    stream_sent = 1'b1;
++                end
++            end
++            else
++                s2mm_next = S2MM_READY;
++        end
++
++        endcase
++    end
++
++    //************************************************
++    //             AXI-Stream FSM [Read]
++    //************************************************
++/*
++    // mm2s axi
++    logic [DATA_WIDTH-1:0]  mm2s_axis_tdata;
++    logic [TKEEP_WIDTH-1:0] mm2s_axis_tkeep;
++    logic                   mm2s_axis_tlast;
++    logic                   mm2s_axis_tvalid;
++
++
++    // MM2S FSM states
++    typedef enum {MM2S_IDLE,MM2S_START,MM2S_VALID,MM2S_READY} state_f;
++    
++    state_f state_reg, state_next; 
++
++    always_ff@(posedge aclk, negedge aresetn) begin
++        if(!aresetn) // Boot up the FSM.
++            state_reg <= MM2S_IDLE;
++        else 
++            state_reg <= state_next; 
++    end
++
++    // Axi Stream FSM
++    always_comb begin
++
++        state_next = state_reg;
++
++        m_tready_buff = 1'b0;
++
++        mm2s_axis_tvalid = 1'b0;
++        mm2s_axis_tdata = '0;
++        mm2s_axis_tkeep = '0;
++        mm2s_axis_tlast = '0;
++
++        case(state_reg)
++
++        //AXI IDLE state
++        MM2S_IDLE: begin 
++            if(abp_complete0)
++                state_next = MM2S_START;
++            else
++                state_next = MM2S_IDLE;
++        end
++
++        //AXI START state
++        MM2S_START: begin
++            state_next = MM2S_VALID;
++        end
++
++        //AXI VALID state
++        MM2S_VALID: begin
++            if(m_tvalid_buff) //**SLAVE-SIDE.
++                state_next = MM2S_READY;
++            else
++                state_next = MM2S_VALID;
++        end
++
++        //AXI READY state
++        MM2S_READY: begin 
++            if(m_tvalid_buff && m_axis_tready) begin
++                m_tready_buff = 1'b1;
++
++                mm2s_axis_tvalid = 1'b1;
++                mm2s_axis_tdata = m_tdata_buff;
++                mm2s_axis_tkeep = m_tkeep_buff;
++                mm2s_axis_tlast = m_tlast_buff;
++
++                if(m_tlast_buff) begin
++                    state_next = MM2S_VALID;
++                end
++            end    
++            else
++                state_next = MM2S_READY;
++        end
++
++        endcase
++    end
++*/
++
++    //************************************************
++    //         Write-ack/Read response handling 
++    //************************************************
++ 
++    // Master mux selection
++    typedef enum logic [1:0] {RET_IDLE, RET_ACK, RET_READ} sel_t;
++    sel_t sel, sel_n;
++
++    logic sent_first_read;
++
++    always_comb begin
++    sel_n = sel;
++
++    // ---------------- Arbiter (ACK priority) ----------------
++    case (sel)
++        RET_IDLE: begin
++        if (m_ack_tvalid_buff && s2mm_rd_meta_tvalid) sel_n = RET_ACK;
++        else if (m_tvalid_buff && mm2s_rd_meta_tvalid) sel_n = RET_READ;
++        end
++
++        RET_ACK: begin
++        // one-beat; once it handshakes, go idle
++        if (m_ack_tvalid_buff && m_axis_tready && s2mm_rd_meta_tvalid) sel_n = RET_IDLE;
++        end
++
++        RET_READ: begin
++        // lock until last beat handshakes
++        if (m_tvalid_buff && m_axis_tready && m_tlast_buff) sel_n = RET_IDLE;
++        end
++    endcase
++    end
++
++    // ---------------- Maser Outputs ----------------
++    always_comb begin
++        // m_axi
++        m_axis_tvalid = 1'b0;
++        m_axis_tdata = '0;
++        m_axis_tkeep = '0;
++        m_axis_tlast = 1'b0;
++
++        m_axis_tuser_size = '0;
++        m_axis_tuser_src = 16'h0000;
++        m_axis_tuser_dst = 16'h0040;
++
++        //MM2S Buffer tready
++        m_tready_buff = 1'b0;
++        //Write Ack Buffer tready
++        m_ack_tready_buff = 1'b0;
++
++        metadata_mem_out = '0;
++        metadata_mem_out_valid = 1'b0;
++
++        //S2MM metadata buffer
++        s2mm_rd_meta_tready = 0;
++        //MM2S metadata buffer
++        mm2s_rd_meta_tready= 0;
++
++        case (sel)
++        // ---- Write ACK Path ----
++        RET_ACK: begin
++            m_axis_tvalid = m_ack_tvalid_buff;
++            m_axis_tdata = m_ack_tdata_buff;
++            m_axis_tkeep = m_ack_tkeep_buff;
++            m_axis_tlast = m_ack_tlast_buff;
++
++            m_ack_tready_buff = m_axis_tready;
++
++            metadata_mem_out = s2mm_rd_meta_tdata;
++            metadata_mem_out_valid = s2mm_rd_meta_tvalid;
++
++            if (m_ack_tvalid_buff && m_axis_tready) begin
++                s2mm_rd_meta_tready = 1;
++            end
++        end
++
++        // ---- Read Burst Path ----
++        RET_READ: begin
++            m_axis_tvalid = m_tvalid_buff;
++            m_axis_tdata = m_tdata_buff;
++            m_axis_tkeep = m_tkeep_buff;
++            m_axis_tlast = m_tlast_buff;
++
++            m_tready_buff = m_axis_tready;
++
++            if (!sent_first_read) begin
++
++            metadata_mem_out = mm2s_rd_meta_tdata;
++            metadata_mem_out_valid = mm2s_rd_meta_tvalid;
++ 
++            //m_tready_buff   = m_axis_tready; // gate first beat
++
++            if (m_tvalid_buff && m_axis_tready) begin
++                mm2s_rd_meta_tready = 1;
++            end
++            end
++        end
++        endcase
++    end
++
++    // ---------------- Track read burst progress ----------------
++    always_ff @(posedge aclk or negedge aresetn) begin
++        if (!aresetn) begin
++        sel             <= RET_IDLE;
++        sent_first_read <= 0;
++        end else begin
++        sel <= sel_n;
++
++        if (sel == RET_READ) begin
++            if (!sent_first_read && m_tvalid_buff && m_axis_tready)
++            sent_first_read <= 1;
++            if (m_tvalid_buff && m_axis_tready && m_tlast_buff)
++            sent_first_read <= 0;
++        end else begin
++            sent_first_read <= 0;
++        end
++        end
++    end
++
++    //******************************************
++    //         AXI-Stream Status Hardware 
++    //******************************************
++    /*Clearing the status signals (needed for datamover stable functionality)*/
++
++    // MM2S
++    always_ff@(posedge aclk, negedge aresetn) begin
++        if(!aresetn || !abp_complete0) // Boot up the STS Hardware.
++            s_axis_mm2s_sts_tready <= 1'b0;
++        else if (s_axis_mm2s_sts_tvalid)
++            s_axis_mm2s_sts_tready <= 1'b1; 
++        else
++            s_axis_mm2s_sts_tready <= 1'b0;
++    end
++
++
++    // S2MM
++    always_ff@(posedge aclk, negedge aresetn) begin
++        if(!aresetn || !abp_complete0) // Boot up the STS Hardware.
++            s_axis_s2mm_sts_tready <= 1'b0;
++        else if (s_axis_s2mm_sts_tvalid)
++            s_axis_s2mm_sts_tready <= 1'b1; 
++        else
++            s_axis_s2mm_sts_tready <= 1'b0;
++    end
++
++endmodule
+diff --git a/src/hbm_subsystem/memory_controller/metadata_buffer.sv b/src/hbm_subsystem/memory_controller/metadata_buffer.sv
+new file mode 100644
+index 0000000..b2c9f03
+--- /dev/null
++++ b/src/hbm_subsystem/memory_controller/metadata_buffer.sv
+@@ -0,0 +1,62 @@
++// typedef struct packed {
++//   logic          [31:0] ip;      // IPv4 address of the sender
++//   logic          [47:0] mac;     // Mac address of the sender
++//   logic           [7:0] id;      // Operation identifier used to distinguish consecutive writes
++//   logic           [7:0] opcode;  // Operation code
++//   logic          [63:0] key;
++// } st_metadata;
++
++module metadata_buffer #(
++  parameter DEPTH      = 64,
++  parameter PTR_WIDTH  = $clog2(DEPTH)
++)(
++  input  logic         aclk,
++  input  logic         aresetn,
++
++  // Slave side (no ready)
++  input  logic         s_valid,
++  input  st_metadata   s_data,
++
++  // Master side (with ready)
++  output logic         m_valid,
++  output st_metadata   m_data,
++  input  logic         m_ready
++);
++
++  // Memory Buffers
++  st_metadata mem [DEPTH-1:0];
++
++  // Write & Read pointers
++  logic [PTR_WIDTH-1:0] write_ptr;
++  logic [PTR_WIDTH-1:0] read_ptr;
++
++  // Counter
++  logic [PTR_WIDTH-1:0] count;
++
++always_ff @(posedge aclk or negedge aresetn) begin
++  if (!aresetn) begin
++    write_ptr <= '0;
++    read_ptr  <= '0;
++    count     <= '0;
++  end 
++  else begin
++    // Write
++    if (s_valid) begin
++      mem[write_ptr] <= s_data;
++      write_ptr      <= write_ptr + 1;
++      if (count < (DEPTH-1))
++        count <= count + 1;
++    end
++
++    // Read
++    if (m_valid && m_ready) begin
++      read_ptr <= read_ptr + 1;
++      count    <= count - 1;
++    end
++  end
++end
++
++  assign m_valid = (count != 0);
++  assign m_data  = mem[read_ptr];
++
++endmodule
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/memory_controller/stream_buffer.sv b/src/hbm_subsystem/memory_controller/stream_buffer.sv
+new file mode 100644
+index 0000000..c2abfbc
+--- /dev/null
++++ b/src/hbm_subsystem/memory_controller/stream_buffer.sv
+@@ -0,0 +1,84 @@
++module stream_buffer #(
++    parameter DATA_WIDTH = 512,
++    parameter KEEP_WIDTH = DATA_WIDTH/8,
++    parameter DEPTH      = 64,
++    parameter PTR_WIDTH  = $clog2(DEPTH)
++)(
++    input logic aclk,
++    input logic aresetn,
++
++    input  logic [DATA_WIDTH-1:0] s_axis_tdata,
++    input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
++    input  logic                  s_axis_tvalid,
++    input  logic                  s_axis_tlast,
++    output logic                  s_axis_tready,
++
++
++    output logic [DATA_WIDTH-1:0] m_axis_tdata,
++    output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
++    output logic                  m_axis_tvalid,
++    output logic                  m_axis_tlast,
++    input  logic                  m_axis_tready
++    );
++
++// Memory Buffers
++logic [DEPTH-1:0][DATA_WIDTH-1:0] tdata_buffer;
++logic [DEPTH-1:0][KEEP_WIDTH-1:0] tkeep_buffer;
++logic [DEPTH-1:0]                 tlast_buffer;
++
++// Write & Read pointers
++logic [PTR_WIDTH-1:0] write_ptr;
++logic [PTR_WIDTH-1:0] read_ptr;
++
++// Counter
++logic [PTR_WIDTH:0] count;
++
++// Write logic
++always_ff @(posedge aclk, negedge aresetn) begin
++    if(!aresetn) begin
++        write_ptr <= '0;
++    end
++    else if (s_axis_tvalid && s_axis_tready) begin
++        tdata_buffer[write_ptr] <= s_axis_tdata;
++        tkeep_buffer[write_ptr] <= s_axis_tkeep;
++        tlast_buffer[write_ptr] <= s_axis_tlast;
++        write_ptr <= (write_ptr == DEPTH - 1)? 0: write_ptr + 1;
++    end
++end
++
++// Read logic
++always_ff @(posedge aclk, negedge aresetn) begin
++    if(!aresetn) begin
++        read_ptr <= '0;
++    end
++    else if (m_axis_tvalid && m_axis_tready) begin
++        read_ptr <= (read_ptr == DEPTH - 1)? 0: read_ptr + 1;
++    end
++end
++
++// Count logic
++always_ff @(posedge aclk, negedge aresetn) begin
++    if(!aresetn) begin
++        count <= '0;
++    end
++    else begin
++        case({s_axis_tvalid && s_axis_tready, m_axis_tvalid  && m_axis_tready})
++            2'b01: count <= count - 1; // Read only
++            2'b10: count <= count + 1; // Write only
++            2'b11: count <= count;    // Read + Write (NO change)
++            default: count <= count;
++        endcase
++    end
++end
++
++// Control signals & Read output
++assign m_axis_tdata  = tdata_buffer[read_ptr];
++assign m_axis_tkeep  = tkeep_buffer[read_ptr];
++assign m_axis_tlast  = tlast_buffer[read_ptr];
++
++assign m_axis_tvalid = (count !=0);  //Not Empty
++assign s_axis_tready = (count != DEPTH); // Not Full
++
++endmodule
++
++
+diff --git a/src/hbm_subsystem/memory_controller/synchronizer.sv b/src/hbm_subsystem/memory_controller/synchronizer.sv
+new file mode 100644
+index 0000000..291d34f
+--- /dev/null
++++ b/src/hbm_subsystem/memory_controller/synchronizer.sv
+@@ -0,0 +1,98 @@
++`timescale 1ns / 1ps
++//////////////////////////////////////////////////////////////////////////////////
++// Company: 
++// Engineer: 
++// 
++// Create Date: 05/17/2025 08:44:13 PM
++// Design Name: 
++// Module Name: Controller_Arbitrer
++// Project Name: 
++// Target Devices: 
++// Tool Versions: 
++// Description: 
++// 
++// Dependencies: 
++// 
++// Revision:
++// Revision 0.01 - File Created
++// Additional Comments:
++// 
++//////////////////////////////////////////////////////////////////////////////////
++module synchronizer #(
++    parameter N = 8
++)(
++    input logic  aclk,
++    input logic  aresetn,
++
++    input logic  s2mm_cmd_start,
++
++    input logic  command_sent,
++    input logic  stream_sent,
++
++    output logic stream_enable
++);
++
++    // Arbitrer FSM states
++    typedef enum {A_IDLE,A_WAIT_COMMAND,A_INCR_COMMAND,A_DECR_COMMAND} state_a;
++
++    logic [N-1:0] cmd_count_reg;
++    logic [N-1:0] cmd_count_next;
++
++    state_a state_reg, state_next; 
++
++    always_ff @(posedge aclk, negedge aresetn) begin
++        if(!aresetn) begin // Boot up the FSM.
++            state_reg <= A_IDLE;
++            cmd_count_reg <= '0;
++        end
++        else begin
++            state_reg <= state_next;
++            cmd_count_reg <= cmd_count_next; 
++        end
++    end
++
++    // Arbitrer FSM
++    always_comb begin
++        state_next = state_reg;
++        cmd_count_next = cmd_count_reg;
++
++        case(state_reg)
++
++        //Arbitrer IDLE state
++        A_IDLE: begin 
++            if(s2mm_cmd_start)
++                state_next = A_WAIT_COMMAND;
++            else
++                state_next = A_IDLE;
++        end
++        
++        //CMD START state
++        A_WAIT_COMMAND: begin
++            if(command_sent && stream_sent)
++                state_next = A_WAIT_COMMAND; // no change
++            else if (command_sent)
++                state_next = A_INCR_COMMAND;
++            else if (stream_sent)
++                state_next = A_DECR_COMMAND;
++            else
++                state_next = A_WAIT_COMMAND;
++        end
++
++        A_INCR_COMMAND: begin
++            cmd_count_next = cmd_count_reg +1;
++            state_next = A_WAIT_COMMAND;
++        end 
++
++        A_DECR_COMMAND: begin
++        if(cmd_count_reg > 0)
++                cmd_count_next = cmd_count_reg -1;
++            state_next = A_WAIT_COMMAND;
++        end
++
++        endcase
++
++    end
++
++    assign stream_enable = (cmd_count_reg !=0);
++
++endmodule
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
 new file mode 100644
@@ -512,12 +2002,11 @@ index 0000000..dabe418
 +) main;
 diff --git a/src/hbm_subsystem/packet_parser.p4 b/src/hbm_subsystem/packet_parser.p4
 new file mode 100644
-index 0000000..1b33efd
+index 0000000..4cc3d0a
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_parser.p4
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,268 @@
 +// TODO: Filter out read results as well
-+// TODO: Add size from tuser to metadata
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -1398,7 +2887,7 @@ index 0000000..227b301
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/vivado_ip/packet_deparser.tcl b/src/hbm_subsystem/vivado_ip/packet_deparser.tcl
 new file mode 100644
-index 0000000..581855e
+index 0000000..c5cd03b
 --- /dev/null
 +++ b/src/hbm_subsystem/vivado_ip/packet_deparser.tcl
 @@ -0,0 +1,19 @@
@@ -1414,10 +2903,10 @@ index 0000000..581855e
 +puts "p4file = ${p4file}"
 +
 +create_ip -name vitis_net_p4 -vendor xilinx.com -library ip -module_name packet_deparser -dir ${ip_build_dir}
++set_property CONFIG.P4_FILE "${p4file}" [get_ips packet_deparser]
 +set_property -dict { 
 +  CONFIG.AXIS_CLK_FREQ_MHZ {250} \
 +  CONFIG.CAM_MEM_CLK_FREQ_MHZ {250} \
-+  CONFIG.P4_FILE {${p4file}} \
 +  CONFIG.PKT_RATE {250} \
 +  CONFIG.TOTAL_LATENCY {22} \
 +} [get_ips packet_deparser]
@@ -1442,7 +2931,7 @@ index 0000000..f7ded3c
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/vivado_ip/packet_parser.tcl b/src/hbm_subsystem/vivado_ip/packet_parser.tcl
 new file mode 100644
-index 0000000..20fd30b
+index 0000000..d969959
 --- /dev/null
 +++ b/src/hbm_subsystem/vivado_ip/packet_parser.tcl
 @@ -0,0 +1,20 @@
@@ -1458,11 +2947,11 @@ index 0000000..20fd30b
 +puts "p4file = ${p4file}"
 +
 +create_ip -name vitis_net_p4 -vendor xilinx.com -library ip -module_name packet_parser -dir ${ip_build_dir}
++set_property CONFIG.P4_FILE "${p4file}" [get_ips packet_parser]
 +set_property -dict { 
 +  CONFIG.AXIS_CLK_FREQ_MHZ {250} \
 +  CONFIG.CAM_MEM_CLK_FREQ_MHZ {250} \
 +  CONFIG.JSON_TIMESTAMP {1756741124} \
-+  CONFIG.P4_FILE {${p4file}} \
 +  CONFIG.PKT_RATE {250} \
 +  CONFIG.TOTAL_LATENCY {32} \
 +} [get_ips packet_parser]
@@ -1480,7 +2969,7 @@ index 0000000..8d93e4e
 +}
 \ No newline at end of file
 diff --git a/src/open_nic_shell.sv b/src/open_nic_shell.sv
-index 572e191..fc1bcec 100644
+index 572e191..3e57fe2 100644
 --- a/src/open_nic_shell.sv
 +++ b/src/open_nic_shell.sv
 @@ -278,7 +278,7 @@ module open_nic_shell #(
@@ -1518,7 +3007,7 @@ index 572e191..fc1bcec 100644
    // Packet adapter interfaces to the box running at 250MHz
    wire     [NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tvalid;
    wire [512*NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tdata;
-@@ -807,6 +826,42 @@ module open_nic_shell #(
+@@ -807,10 +826,46 @@ module open_nic_shell #(
      .s_axi_wstrb          (axi_wstrb),
      .s_axi_wuser          (axi_wuser),
      .s_axi_wvalid         (axi_wvalid),
@@ -1559,8 +3048,15 @@ index 572e191..fc1bcec 100644
 +    .s_axis_cmac_c2h_tuser_dst        (axis_hbm_c2h_tuser_dst),
 +    .s_axis_cmac_c2h_tready           (axis_hbm_c2h_tready),
      
-     .axi_clk              (axis_aclk),
-     .axi_resetn           (sys_cfg_powerup_rstn),
+-    .axi_clk              (axis_aclk),
+-    .axi_resetn           (sys_cfg_powerup_rstn),
+-    .hbm_ref_clk          (ref_clk_100mhz)
++    .axi_clk                          (axis_aclk),
++    .axi_rstn                         (sys_cfg_powerup_rstn),
++    .hbm_ref_clk                      (ref_clk_100mhz)
+   );
+ 
+   generate for (genvar i = 0; i < NUM_CMAC_PORT; i++) begin: cmac_port
 @@ -975,23 +1030,23 @@ module open_nic_shell #(
      .s_axil_rresp                     (axil_box0_rresp),
      .s_axil_rready                    (axil_box0_rready),

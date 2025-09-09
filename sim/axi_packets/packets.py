@@ -3,6 +3,7 @@ from scapy.packet import Raw
 from scapy.volatile import RandString
 
 from .headers import *
+from .replication import *
 
 
 def _generate_load(length):
