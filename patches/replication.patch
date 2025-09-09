@@ -224,7 +224,7 @@ index 97fedbc..c4681b4 100644
    assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
    assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..1e2976d 100644
+index 4571b97..815469d 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
 @@ -1,4 +1,8 @@
@@ -324,7 +324,7 @@ index 4571b97..1e2976d 100644
    hbm_bd_wrapper hbm_inst (
      .s_axi_hbm_araddr                (s_axi_araddr),
      .s_axi_hbm_arburst               (s_axi_arburst),
-@@ -87,8 +164,400 @@ module hbm_subsystem (
+@@ -87,8 +164,405 @@ module hbm_subsystem (
      .s_axi_hbm_wuser                 (s_axi_wuser),
      .s_axi_hbm_wvalid                (s_axi_wvalid),
  
@@ -454,7 +454,7 @@ index 4571b97..1e2976d 100644
 +    .m_axis_mem_tkeep       (axis_engine_to_memory_tkeep),
 +    .m_axis_mem_tlast       (axis_engine_to_memory_tlast),
 +    .m_axis_mem_tready      (axis_engine_to_memory_tready),
-+    .metadata_mem_out       (mem_metatada_out),
++    .metadata_mem_out       (mem_metadata_out),
 +    .metadata_mem_out_valid (mem_metadata_out_valid),
 +
 +    .axis_clk               (axi_clk),
@@ -510,7 +510,7 @@ index 4571b97..1e2976d 100644
 +    .s_axis_s2mm_sts_tvalid   (axis_read_sts_tvalid),
 +    .s_axis_s2mm_sts_tready   (axis_read_sts_tready),
 +
-+    .abp_complete0            (abp_complete_0),
++    .abp_complete0            (apb_complete_0),
 +    .aclk                     (axi_clk),
 +    .aresetn                  (axi_rstn)
 +  );
@@ -649,8 +649,12 @@ index 4571b97..1e2976d 100644
 +  assign axis_filter_to_engine_tlast  = axis_filter_out_tlast[1];
 +  assign axis_filter_out_tready[1]    = axis_filter_to_engine_tready;
 +
-+  logic replication_tuser;
-+  assign replication_tuser = {16'h0, 16'h0, 16'h0040};
++  logic        replication_tuser;
++  logic [47:0] cmac_tuser;
++  assign replication_tuser          = {16'h0, 16'h0, 16'h0040};
++  assign m_axis_cmac_h2c_tuser_size = cmac_tuser[47-:16];
++  assign m_axis_cmac_h2c_tuser_src  = cmac_tuser[31-:16];
++  assign m_axis_cmac_h2c_tuser_dst  = cmac_tuser[15-:16];
 +
 +  packet_arbiter packet_arbiter_inst (
 +    .s_axis_tvalid           ({axis_deparser_to_arbiter_tvalid, s_axis_qdma_h2c_tvalid}), 
@@ -664,9 +668,10 @@ index 4571b97..1e2976d 100644
 +    .m_axis_tdata            (m_axis_cmac_h2c_tdata),
 +    .m_axis_tkeep            (m_axis_cmac_h2c_tkeep),
 +    .m_axis_tlast            (m_axis_cmac_h2c_tlast),
-+    .m_axis_tuser            (m_axis_cmac_h2c_tuser),
++    .m_axis_tuser            (cmac_tuser),
 +    .m_axis_tready           (m_axis_cmac_h2c_tready),
 +
++    .s_req_suppress          (2'b0),
 +    .aclk                    (axi_clk),
 +    .aresetn                 (axi_rstn)
 +  );
@@ -684,7 +689,7 @@ index 4571b97..1e2976d 100644
 +    .WRITE_DATA_WIDTH    (48)
 +  ) metadata_fifo (
 +    .wr_en               (cmac_tuser_write_en),
-+    .din                 ({s_axis_cmac_c2h_tuser_dst, s_axis_cmac_c2h_tuser_src, s_axis_cmac_c2h_tuser_size}),
++    .din                 ({s_axis_cmac_c2h_tuser_size, s_axis_cmac_c2h_tuser_src, s_axis_cmac_c2h_tuser_dst}),
 +    .wr_ack              (),
 +    .rd_en               (cmac_tuser_read_en),
 +    .data_valid          (),
@@ -714,12 +719,12 @@ index 4571b97..1e2976d 100644
 +  always @(posedge axi_clk) begin
 +    if(~axi_rstn)
 +    begin
-+      cmac_tuser_write_en_toggle <= 1'b0;
++      cmac_tuser_write_en_toggle <= 1'b1;
 +    end
 +    else begin
-+      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && !s_axis_cmac_c2h_tlast) 
++      if (cmac_tuser_write_en_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready) 
 +        cmac_tuser_write_en_toggle <= 1'b0;  
-+      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
++      if (!cmac_tuser_write_en_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
 +        cmac_tuser_write_en_toggle <= 1'b1;
 +    end
 +  end
