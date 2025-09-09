@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
+from enum import Enum
 from scapy.all import Packet, bind_layers, ByteField, BitField, Raw, Ether, IP, UDP
+
+
+class Opcode(Enum):
+  READ = 0
+  WRITE = 1
+  READ_RESULT = 2
+  WRITE_ACK = 3
+
 
 class Replication(Packet):
   name = "Replication"
@@ -9,8 +18,6 @@ class Replication(Packet):
     BitField("key", 0, 64),
   ]
 
-bind_layers(UDP, Replication, dport=30583)
-bind_layers(Replication, Raw)
 
 def make_replication_packet(dst_mac, src_mac, dst_ip, src_ip, opcode, key, payload):
   eth = Ether(dst=dst_mac, src=src_mac)
@@ -19,3 +26,7 @@ def make_replication_packet(dst_mac, src_mac, dst_ip, src_ip, opcode, key, paylo
   rep = Replication(opcode=opcode, id=0, key=key)
   pkt = eth / ip / udp / rep / Raw(payload)
   return pkt
+
+
+bind_layers(UDP, Replication, dport=30583)
+bind_layers(Replication, Raw)

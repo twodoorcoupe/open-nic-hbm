@@ -224,15 +224,15 @@ index 97fedbc..c4681b4 100644
    assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
    assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..815469d 100644
+index 4571b97..683184c 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
 @@ -1,4 +1,8 @@
 -module hbm_subsystem (
 +module hbm_subsystem #(
-+  parameter IP_ADDRESS     = 0,
-+  parameter MAC_ADDRESS    = 0,
-+  parameter METADATA_WIDTH = 160
++  parameter IP_ADDRESS     = 5,
++  parameter MAC_ADDRESS    = 7,
++  parameter METADATA_WIDTH = 161
 +) (
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
@@ -324,7 +324,7 @@ index 4571b97..815469d 100644
    hbm_bd_wrapper hbm_inst (
      .s_axi_hbm_araddr                (s_axi_araddr),
      .s_axi_hbm_arburst               (s_axi_arburst),
-@@ -87,8 +164,405 @@ module hbm_subsystem (
+@@ -87,8 +164,402 @@ module hbm_subsystem (
      .s_axi_hbm_wuser                 (s_axi_wuser),
      .s_axi_hbm_wvalid                (s_axi_wvalid),
  
@@ -412,17 +412,20 @@ index 4571b97..815469d 100644
 +  logic                      cmac_tuser_empty;
 +  logic                      cmac_tuser_write_en_toggle;
 +
-+  logic [METADATA_WIDTH-1:0] mem_metatada_in;
++  logic [METADATA_WIDTH-2:0] mem_metadata_in;
 +  logic                      mem_metadata_in_valid;
 +
-+  logic [METADATA_WIDTH-1:0] mem_metatada_out;
++  logic [METADATA_WIDTH-2:0] mem_metadata_out;
 +  logic                      mem_metadata_out_valid;
 +
-+  logic [METADATA_WIDTH-1:0] engine_metatada_out;
++  logic [METADATA_WIDTH-2:0] engine_metadata_out;
 +  logic                      engine_metadata_out_valid;
 +
-+  logic [METADATA_WIDTH-1:0] engine_metatada_in;
-+  logic                      engine_metadata_in_valid;
++  logic [METADATA_WIDTH-1:0] parser_metadata_in;
++  logic                      parser_metadata_in_valid;
++
++  logic [METADATA_WIDTH-1:0] parser_metadata_out;
++  logic                      parser_metadata_out_valid;
 +
 +  replication_engine replication_engine_inst (
 +    .s_axis_tvalid          (axis_filter_to_engine_tvalid),
@@ -430,15 +433,15 @@ index 4571b97..815469d 100644
 +    .s_axis_tkeep           (axis_filter_to_engine_tkeep),
 +    .s_axis_tlast           (axis_filter_to_engine_tlast),
 +    .s_axis_tready          (axis_filter_to_engine_tready),
-+    .metadata_in            (engine_metatada_in),
-+    .metadata_in_valid      (engine_metadata_in_valid),
++    .metadata_in            (parser_metadata_out[METADATA_WIDTH-1:1]),
++    .metadata_in_valid      (parser_metadata_out_valid),
 +
 +    .m_axis_tvalid          (axis_engine_to_deparser_tvalid),
 +    .m_axis_tdata           (axis_engine_to_deparser_tdata),
 +    .m_axis_tkeep           (axis_engine_to_deparser_tkeep),
 +    .m_axis_tlast           (axis_engine_to_deparser_tlast),
 +    .m_axis_tready          (axis_engine_to_deparser_tready),
-+    .metadata_out           (engine_metatada_out),
++    .metadata_out           (engine_metadata_out),
 +    .metadata_out_valid     (engine_metadata_out_valid),
 +
 +    .s_axis_mem_tvalid      (axis_memory_to_engine_tvalid),
@@ -446,7 +449,7 @@ index 4571b97..815469d 100644
 +    .s_axis_mem_tkeep       (axis_memory_to_engine_tkeep),
 +    .s_axis_mem_tlast       (axis_memory_to_engine_tlast),
 +    .s_axis_mem_tready      (axis_memory_to_engine_tready),
-+    .metadata_mem_in        (mem_metatada_in),
++    .metadata_mem_in        (mem_metadata_in),
 +    .metadata_mem_in_valid  (mem_metadata_in_valid),
 +
 +    .m_axis_mem_tvalid      (axis_engine_to_memory_tvalid),
@@ -515,12 +518,6 @@ index 4571b97..815469d 100644
 +    .aresetn                  (axi_rstn)
 +  );
 +
-+  logic [METADATA_WIDTH-1:0] parser_metadata_in;
-+  logic                      parser_metadata_in_valid;
-+
-+  logic [METADATA_WIDTH-1:0] parser_metadata_out;
-+  logic                      parser_metadata_out_valid;
-+
 +  logic vitis_net_p4_resetn;
 +  assign vitis_net_p4_resetn = axi_rstn && apb_complete_0;
 +
@@ -570,7 +567,7 @@ index 4571b97..815469d 100644
 +    .s_axis_tkeep            (axis_engine_to_deparser_tkeep), 
 +    .s_axis_tlast            (axis_engine_to_deparser_tlast), 
 +    .s_axis_tready           (axis_engine_to_deparser_tready), 
-+    .user_metadata_in        ({engine_metatada_out, IP_ADDRESS, MAC_ADDRESS}),
++    .user_metadata_in        ({engine_metadata_out, IP_ADDRESS, MAC_ADDRESS}),
 +    .user_metadata_in_valid  (engine_metadata_out_valid),
 +
 +    .m_axis_tvalid           (axis_deparser_to_arbiter_tvalid), 
@@ -596,13 +593,13 @@ index 4571b97..815469d 100644
 +    end
 +    else begin
 +      if (parser_metadata_out_valid) 
-+        is_replication_buf <= parser_metadata_out[METADATA_WIDTH-1];
++        is_replication_buf <= parser_metadata_out[0];
 +      else
 +        is_replication_buf <= is_replication_buf;
 +    end
 +  end
 +
-+  assign is_replication = parser_metadata_out_valid ? parser_metadata_out[METADATA_WIDTH-1] : is_replication_buf;
++  assign is_replication = parser_metadata_out_valid ? parser_metadata_out[0] : is_replication_buf;
 +
 +  logic    [1:0] axis_filter_out_tvalid;
 +  logic [1023:0] axis_filter_out_tdata;
@@ -2281,7 +2278,7 @@ index 0000000..4cc3d0a
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..a6328e5
+index 0000000..e19f523
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
 @@ -0,0 +1,586 @@
@@ -2290,8 +2287,8 @@ index 0000000..a6328e5
 +typedef struct packed {
 +  logic          [31:0] ip;      // IPv4 address of the sender
 +  logic          [47:0] mac;     // Mac address of the sender
-+  logic           [7:0] id;      // Operation identifier used to distinguish consecutive writes
-+  logic           [7:0] opcode;  // Operation code
++  logic           [7:0] opcode;  // Operation identifier used to distinguish consecutive writes
++  logic           [7:0] id;      // Operation code
 +  logic          [63:0] key;
 +} st_metadata;
 +
@@ -2300,7 +2297,7 @@ index 0000000..a6328e5
 +  parameter KEEP_WIDTH = DATA_WIDTH / 8,
 +  parameter KEY_WIDTH  = 64,
 +  parameter NUM_NODES  = 4,
-+  parameter logic [31:0] NODES_IPS [NUM_NODES] = '{default: '0}
++  parameter logic [31:0] NODES_IPS [NUM_NODES] = '{32'h0, 32'h1, 32'h2, 32'h3}
 +) (
 +  input  logic axis_clk,
 +  input  logic axis_rstn,
