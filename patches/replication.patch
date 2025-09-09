@@ -224,15 +224,15 @@ index 97fedbc..c4681b4 100644
    assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
    assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..683184c 100644
+index 4571b97..ef095e8 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
 @@ -1,4 +1,8 @@
 -module hbm_subsystem (
 +module hbm_subsystem #(
-+  parameter IP_ADDRESS     = 5,
-+  parameter MAC_ADDRESS    = 7,
-+  parameter METADATA_WIDTH = 161
++  parameter logic [31:0] IP_ADDRESS     = 5,
++  parameter logic [47:0] MAC_ADDRESS    = 7,
++  parameter              METADATA_WIDTH = 161
 +) (
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
@@ -2004,11 +2004,10 @@ index 0000000..dabe418
 +) main;
 diff --git a/src/hbm_subsystem/packet_parser.p4 b/src/hbm_subsystem/packet_parser.p4
 new file mode 100644
-index 0000000..4cc3d0a
+index 0000000..de882c0
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_parser.p4
-@@ -0,0 +1,268 @@
-+// TODO: Filter out read results as well
+@@ -0,0 +1,270 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -2224,24 +2223,27 @@ index 0000000..4cc3d0a
 +    is_rep  = (bit<1>) 0;
 +
 +    if (hdr.eth.isValid() && hdr.ipv4.isValid() && hdr.udp.isValid() && hdr.rep.isValid() && hdr.key.isValid()) {
-+      ip_src  = hdr.ipv4.src;
-+      mac_src = hdr.eth.smac;
-+      opcode  = hdr.rep.opcode;
-+      index   = hdr.rep.id;
-+      key     = hdr.key.key;
-+      is_rep  = (bit<1>) 1;
++      if (hdr.rep.opcode != READ_RESULT) {
++        ip_src  = hdr.ipv4.src;
++        mac_src = hdr.eth.smac;
++        opcode  = hdr.rep.opcode;
++        index   = hdr.rep.id;
++        key     = hdr.key.key;
++        is_rep  = (bit<1>) 1;
 +
-+      hdr.eth.setInvalid();
-+      hdr.ipv4.setInvalid();
-+      hdr.udp.setInvalid();
-+      hdr.rep.setInvalid();
++        hdr.eth.setInvalid();
++        hdr.ipv4.setInvalid();
++        hdr.udp.setInvalid();
++        hdr.rep.setInvalid();
++      }
 +    }
 +
-+    meta.ip_src = ip_src;
-+    meta.opcode = opcode;
-+    meta.index  = index;
-+    meta.key    = key;
-+    meta.is_rep = is_rep;
++    meta.mac_src  = mac_src;
++    meta.ip_src   = ip_src;
++    meta.opcode   = opcode;
++    meta.index    = index;
++    meta.key      = key;
++    meta.is_rep   = is_rep;
 +  }
 +}
 +

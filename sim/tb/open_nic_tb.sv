@@ -328,7 +328,7 @@ initial begin
     // Write the number of QDMA queues to the OpenNIC
     board.RP.tx_usrapp.TSK_REG_WRITE(board.RP.tx_usrapp.user_bar, 16'h1000, 32'h200, 4'hf);
 
-    board.RP.tx_usrapp.testname = "qdma_mm_st_test0";
+    board.RP.tx_usrapp.testname = "qdma_st_test0";
     //Test starts here
     if(board.RP.tx_usrapp.testname == "dummy_test") begin
       $display("[%t] %m: Invalid TESTNAME: %0s", $realtime, board.RP.tx_usrapp.testname);

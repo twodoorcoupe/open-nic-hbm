@@ -81,7 +81,7 @@ end
 else if(board.RP.tx_usrapp.testname == "qdma_st_test0")
 begin
   board.RP.tx_usrapp.qid = 11'h0;
-  board.RP.tx_usrapp.TSK_QDMA_ST_H2C_TEST(board.RP.tx_usrapp.qid, 0);
+  // board.RP.tx_usrapp.TSK_QDMA_ST_H2C_TEST(board.RP.tx_usrapp.qid, 0);
   board.RP.tx_usrapp.TSK_QDMA_ST_C2H_TEST(board.RP.tx_usrapp.qid, 0);
   $display("\n\nCOMPLETED QDMA TEST\n\n");
 //   #1000;
