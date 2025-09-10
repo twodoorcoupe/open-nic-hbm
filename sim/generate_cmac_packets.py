@@ -8,18 +8,26 @@ dst_ip = "4.3.2.1"
 
 PAYLOAD_SIZE = 1024 - 4 - 8
 payload = bytes.fromhex("deadbeef") * (PAYLOAD_SIZE // 4)
-# payload = payload[:PAYLOAD_SIZE]
+
+axi_packets.interface_manager.open_interfaces()
 
 opcode = 1  # Write
 key = 25
 write_packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, payload=payload)
+axi_packets.send_packets("cmac0", write_packet)
+
+axi_packets.make_cycles_delay("cmac0", 1000)
 
 opcode = 0  # Read
 read_packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, payload="")
-
-axi_packets.interface_manager.open_interfaces()
-axi_packets.send_packets("cmac0", write_packet)
-axi_packets.make_cycles_delay("cmac0", 1000)
 axi_packets.send_packets("cmac0", read_packet)
+
+axi_packets.make_cycles_delay("cmac0", 1000)
+
+key = 100
+opcode = 1  # Write to leader
+write_packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, payload=payload)
+axi_packets.send_packets("cmac0", write_packet)
+
 axi_packets.interface_manager.close_interfaces()
 

@@ -8,7 +8,7 @@ index 0000000..b50577f
 +    read_verilog -quiet -sv [glob -nocomplain -directory $module_dir/memory_controller "*.sv"]
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/hbm_bd.tcl b/src/hbm_subsystem/hbm_bd.tcl
-index 97fedbc..c4681b4 100644
+index 97fedbc..2f54b9e 100644
 --- a/src/hbm_subsystem/hbm_bd.tcl
 +++ b/src/hbm_subsystem/hbm_bd.tcl
 @@ -134,6 +134,7 @@ xilinx.com:ip:hbm:1.0\
@@ -104,7 +104,7 @@ index 97fedbc..c4681b4 100644
      CONFIG.USER_SAXI_17 {false} \
      CONFIG.USER_SAXI_18 {false} \
      CONFIG.USER_SAXI_19 {false} \
-@@ -309,14 +369,64 @@ proc create_root_design { parentCell } {
+@@ -309,14 +369,69 @@ proc create_root_design { parentCell } {
    ] $smartconnect_0
  
  
@@ -113,13 +113,18 @@ index 97fedbc..c4681b4 100644
 +  set_property -dict [list \
 +    CONFIG.c_addr_width {34} \
 +    CONFIG.c_dummy {1} \
++    CONFIG.c_enable_cache_user {false} \
 +    CONFIG.c_m_axi_mm2s_data_width {512} \
++    CONFIG.c_m_axi_mm2s_id_width {0} \
 +    CONFIG.c_m_axi_s2mm_data_width {512} \
++    CONFIG.c_m_axi_s2mm_id_width {0} \
 +    CONFIG.c_m_axis_mm2s_tdata_width {512} \
 +    CONFIG.c_mm2s_btt_used {23} \
 +    CONFIG.c_mm2s_burst_size {64} \
++    CONFIG.c_mm2s_include_sf {true} \
 +    CONFIG.c_s2mm_btt_used {23} \
 +    CONFIG.c_s2mm_burst_size {64} \
++    CONFIG.c_s2mm_support_indet_btt {false} \
 +    CONFIG.c_s_axis_s2mm_tdata_width {512} \
 +    CONFIG.c_single_interface {1} \
 +  ] $axi_datamover_0
@@ -170,7 +175,7 @@ index 97fedbc..c4681b4 100644
    connect_bd_net -net clk_in1_0_1  [get_bd_ports hbm_ref_clk] \
    [get_bd_pins clk_wiz_0/clk_in1]
    connect_bd_net -net clk_wiz_0_clk_out1  [get_bd_pins clk_wiz_0/clk_out1] \
-@@ -327,16 +437,47 @@ proc create_root_design { parentCell } {
+@@ -327,48 +442,79 @@ proc create_root_design { parentCell } {
    [get_bd_pins proc_sys_reset_0/slowest_sync_clk]
    connect_bd_net -net clk_wiz_0_locked  [get_bd_pins clk_wiz_0/locked] \
    [get_bd_pins proc_sys_reset_0/dcm_locked]
@@ -188,41 +193,104 @@ index 97fedbc..c4681b4 100644
 -  [get_bd_pins proc_sys_reset_0/ext_reset_in]
  
    # Create address segments
-+  assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM00] -force
+-  assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
++  assign_bd_address -offset 0x00000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM00] -force
 +  assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM01] -force
-+  assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM02] -force
-+  assign_bd_address -offset 0x60000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM03] -force
-+  assign_bd_address -offset 0x80000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM04] -force
-+  assign_bd_address -offset 0xA0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM05] -force
-+  assign_bd_address -offset 0xC0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM06] -force
-+  assign_bd_address -offset 0xE0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM07] -force
-+  assign_bd_address -offset 0x000100000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM08] -force
-+  assign_bd_address -offset 0x000120000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM09] -force
-+  assign_bd_address -offset 0x000140000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM10] -force
-+  assign_bd_address -offset 0x000160000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM11] -force
-+  assign_bd_address -offset 0x000180000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM12] -force
-+  assign_bd_address -offset 0x0001A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM13] -force
-+  assign_bd_address -offset 0x0001C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM14] -force
-+  assign_bd_address -offset 0x0001E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM15] -force
-+  assign_bd_address -offset 0x000200000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM16] -force
-+  assign_bd_address -offset 0x000220000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM17] -force
-+  assign_bd_address -offset 0x000240000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM18] -force
-+  assign_bd_address -offset 0x000260000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM19] -force
-+  assign_bd_address -offset 0x000280000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM20] -force
-+  assign_bd_address -offset 0x0002A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM21] -force
-+  assign_bd_address -offset 0x0002C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM22] -force
-+  assign_bd_address -offset 0x0002E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM23] -force
-+  assign_bd_address -offset 0x000300000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM24] -force
-+  assign_bd_address -offset 0x000320000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM25] -force
-+  assign_bd_address -offset 0x000340000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM26] -force
-+  assign_bd_address -offset 0x000360000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM27] -force
-+  assign_bd_address -offset 0x000380000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM28] -force
-+  assign_bd_address -offset 0x0003A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM29] -force
-+  assign_bd_address -offset 0x0003C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM30] -force
-+  assign_bd_address -offset 0x0003E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM31] -force
-   assign_bd_address -offset 0x00000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
++  assign_bd_address -offset 0x40000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM02] -force
++  assign_bd_address -offset 0x60000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM03] -force
++  assign_bd_address -offset 0x80000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM04] -force
++  assign_bd_address -offset 0xA0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM05] -force
++  assign_bd_address -offset 0xC0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM06] -force
++  assign_bd_address -offset 0xE0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM07] -force
++  assign_bd_address -offset 0x000100000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM08] -force
++  assign_bd_address -offset 0x000120000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM09] -force
++  assign_bd_address -offset 0x000140000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM10] -force
++  assign_bd_address -offset 0x000160000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM11] -force
++  assign_bd_address -offset 0x000180000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM12] -force
++  assign_bd_address -offset 0x0001A0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM13] -force
++  assign_bd_address -offset 0x0001C0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM14] -force
++  assign_bd_address -offset 0x0001E0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM15] -force
++  assign_bd_address -offset 0x000200000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM16] -force
++  assign_bd_address -offset 0x000220000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM17] -force
++  assign_bd_address -offset 0x000240000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM18] -force
++  assign_bd_address -offset 0x000260000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM19] -force
++  assign_bd_address -offset 0x000280000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM20] -force
++  assign_bd_address -offset 0x0002A0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM21] -force
++  assign_bd_address -offset 0x0002C0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM22] -force
++  assign_bd_address -offset 0x0002E0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM23] -force
++  assign_bd_address -offset 0x000300000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM24] -force
++  assign_bd_address -offset 0x000320000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM25] -force
++  assign_bd_address -offset 0x000340000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM26] -force
++  assign_bd_address -offset 0x000360000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM27] -force
++  assign_bd_address -offset 0x000380000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM28] -force
++  assign_bd_address -offset 0x0003A0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM29] -force
++  assign_bd_address -offset 0x0003C0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM30] -force
++  assign_bd_address -offset 0x0003E0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces axi_datamover_0/Data] [get_bd_addr_segs hbm_0/SAXI_16_8HI/HBM_MEM31] -force
++  assign_bd_address -offset 0x00000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM00] -force
    assign_bd_address -offset 0x20000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM01] -force
-   assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
+-  assign_bd_address -offset 0x40000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
+-  assign_bd_address -offset 0x60000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM03] -force
+-  assign_bd_address -offset 0x80000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM04] -force
+-  assign_bd_address -offset 0xA0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM05] -force
+-  assign_bd_address -offset 0xC0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM06] -force
+-  assign_bd_address -offset 0xE0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM07] -force
+-  assign_bd_address -offset 0x000100000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM08] -force
+-  assign_bd_address -offset 0x000120000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM09] -force
+-  assign_bd_address -offset 0x000140000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM10] -force
+-  assign_bd_address -offset 0x000160000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM11] -force
+-  assign_bd_address -offset 0x000180000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM12] -force
+-  assign_bd_address -offset 0x0001A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM13] -force
+-  assign_bd_address -offset 0x0001C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM14] -force
+-  assign_bd_address -offset 0x0001E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM15] -force
+-  assign_bd_address -offset 0x000200000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM16] -force
+-  assign_bd_address -offset 0x000220000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM17] -force
+-  assign_bd_address -offset 0x000240000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM18] -force
+-  assign_bd_address -offset 0x000260000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM19] -force
+-  assign_bd_address -offset 0x000280000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM20] -force
+-  assign_bd_address -offset 0x0002A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM21] -force
+-  assign_bd_address -offset 0x0002C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM22] -force
+-  assign_bd_address -offset 0x0002E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM23] -force
+-  assign_bd_address -offset 0x000300000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM24] -force
+-  assign_bd_address -offset 0x000320000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM25] -force
+-  assign_bd_address -offset 0x000340000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM26] -force
+-  assign_bd_address -offset 0x000360000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM27] -force
+-  assign_bd_address -offset 0x000380000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM28] -force
+-  assign_bd_address -offset 0x0003A0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM29] -force
+-  assign_bd_address -offset 0x0003C0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM30] -force
+-  assign_bd_address -offset 0x0003E0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM31] -force
++  assign_bd_address -offset 0x40000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM02] -force
++  assign_bd_address -offset 0x60000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM03] -force
++  assign_bd_address -offset 0x80000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM04] -force
++  assign_bd_address -offset 0xA0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM05] -force
++  assign_bd_address -offset 0xC0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM06] -force
++  assign_bd_address -offset 0xE0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM07] -force
++  assign_bd_address -offset 0x000100000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM08] -force
++  assign_bd_address -offset 0x000120000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM09] -force
++  assign_bd_address -offset 0x000140000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM10] -force
++  assign_bd_address -offset 0x000160000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM11] -force
++  assign_bd_address -offset 0x000180000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM12] -force
++  assign_bd_address -offset 0x0001A0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM13] -force
++  assign_bd_address -offset 0x0001C0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM14] -force
++  assign_bd_address -offset 0x0001E0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM15] -force
++  assign_bd_address -offset 0x000200000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM16] -force
++  assign_bd_address -offset 0x000220000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM17] -force
++  assign_bd_address -offset 0x000240000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM18] -force
++  assign_bd_address -offset 0x000260000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM19] -force
++  assign_bd_address -offset 0x000280000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM20] -force
++  assign_bd_address -offset 0x0002A0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM21] -force
++  assign_bd_address -offset 0x0002C0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM22] -force
++  assign_bd_address -offset 0x0002E0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM23] -force
++  assign_bd_address -offset 0x000300000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM24] -force
++  assign_bd_address -offset 0x000320000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM25] -force
++  assign_bd_address -offset 0x000340000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM26] -force
++  assign_bd_address -offset 0x000360000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM27] -force
++  assign_bd_address -offset 0x000380000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM28] -force
++  assign_bd_address -offset 0x0003A0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM29] -force
++  assign_bd_address -offset 0x0003C0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM30] -force
++  assign_bd_address -offset 0x0003E0000000 -range 0x20000000 -target_address_space [get_bd_addr_spaces s_axi_hbm] [get_bd_addr_segs hbm_0/SAXI_15_8HI/HBM_MEM31] -force
+ 
+ 
+   # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
 index 4571b97..cbb3e07 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
@@ -733,7 +801,7 @@ index 4571b97..cbb3e07 100644
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/memory_controller.sv b/src/hbm_subsystem/memory_controller/memory_controller.sv
 new file mode 100644
-index 0000000..3824f15
+index 0000000..22e6033
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/memory_controller.sv
 @@ -0,0 +1,769 @@
@@ -1184,8 +1252,8 @@ index 0000000..3824f15
 +                        s2mm_cmd_tvalid = 1'b1;    
 +                        s2mm_cmd_tdata = {8'h00, 6'b0,cmd_address,10'b0 ,1'b0,1'b1,6'b000000,1'b1,BTT};  
 +                        command_sent = 1'b1;
-+                        s_ack_tdata_buff = '1;
-+                        s_ack_tkeep_buff = '1;
++                        s_ack_tdata_buff = '0;
++                        s_ack_tkeep_buff = '0;
 +                        s_ack_tvalid_buff = 1'b1;
 +                        s_ack_tlast_buff = 1'b1;
 +                        cmd_next = C_VALID;
@@ -1772,10 +1840,10 @@ index 0000000..291d34f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
 new file mode 100644
-index 0000000..35eb760
+index 0000000..50d95a9
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_deparser.p4
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,239 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -1937,17 +2005,22 @@ index 0000000..35eb760
 +    if (meta.opcode == READ_RESULT) {
 +      ip_length  = READ_RESULT_SIZE + IP_HEADER_SIZE;
 +      udp_length = READ_RESULT_SIZE;
-+      hdr.key.setInvalid();
 +    } else {
 +      ip_length  = HEADERS_SIZE + IP_HEADER_SIZE;
 +      udp_length = HEADERS_SIZE;
++      hdr.key.setValid();
 +    }
 +
 +    hdr.eth.setValid();
 +    hdr.ipv4.setValid();
 +    hdr.udp.setValid();
 +    hdr.rep.setValid();
-+    hdr.key.setValid();
++
++    if (meta.opcode == READ_RESULT && meta.opcode == WRITE) {
++      hdr.key.setInvalid();
++    } else {
++      hdr.key.setValid();
++    }
 +
 +    hdr.eth.dmac            = meta.mac_src;
 +    hdr.eth.smac            = meta.mac_own;
@@ -2012,10 +2085,10 @@ index 0000000..35eb760
 +) main;
 diff --git a/src/hbm_subsystem/packet_parser.p4 b/src/hbm_subsystem/packet_parser.p4
 new file mode 100644
-index 0000000..de882c0
+index 0000000..ede3b90
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_parser.p4
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,274 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -2239,10 +2312,14 @@ index 0000000..de882c0
 +        key     = hdr.key.key;
 +        is_rep  = (bit<1>) 1;
 +
-+        hdr.eth.setInvalid();
-+        hdr.ipv4.setInvalid();
-+        hdr.udp.setInvalid();
-+        hdr.rep.setInvalid();
++        if (hdr.rep.opcode == READ || hdr.rep.opcode == WRITE_ACK) {
++          smeta.drop = 1;
++        } else {
++          hdr.eth.setInvalid();
++          hdr.ipv4.setInvalid();
++          hdr.udp.setInvalid();
++          hdr.rep.setInvalid();
++        }
 +      }
 +    }
 +
@@ -2288,10 +2365,10 @@ index 0000000..de882c0
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..c8cfb0d
+index 0000000..1cf7be3
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
-@@ -0,0 +1,587 @@
+@@ -0,0 +1,594 @@
 +`timescale 1ns/1ps
 +
 +typedef struct packed {
@@ -2524,7 +2601,6 @@ index 0000000..c8cfb0d
 +          READ: begin
 +            metadata_mem_out_valid = 1'b1;
 +            metadata_mem_out       = net_meta_out;
-+            net_fifo_rd_en         = 1'b1; 
 +            if (m_axis_mem_tready)
 +              net_meta_rd_en = 1'b1;
 +          end
@@ -2629,13 +2705,13 @@ index 0000000..c8cfb0d
 +        end
 +      end
 +
-+      if (!out_busy[1]) begin
++      //FIXME: write pointer should always be at least one higher than read pointer
++      if (!out_busy[1] && write_ptr != 0) begin
 +        out_busy_next[0] = 1'b1;
 +        m_axis_tvalid = 1'b1;
 +        m_axis_tdata  = replica_mem[read_ptr].tdata;
 +        m_axis_tkeep  = replica_mem[read_ptr].tkeep;
 +        m_axis_tlast  = replica_mem[read_ptr].tlast;
-+        //FIXME: if memory controller backpressures, beats could be lost
 +
 +        if (read_ptr == 0) begin
 +          metadata_out_valid = 1'b1;
@@ -2695,8 +2771,10 @@ index 0000000..c8cfb0d
 +              m_axis_tkeep  = '0;
 +              m_axis_tlast  = 1'b1;
 +
++              // TODO: If node is leader, than one ack is mistakenly sent immediately back
 +              if (m_axis_tready) begin
 +                out_busy_next[1] = 1'b0;
++                // This works because memory controller outputs data and metadata together
 +                mem_meta_rd_en   = 1'b1;
 +                mem_fifo_rd_en   = 1'b1;
 +              end
@@ -2722,6 +2800,9 @@ index 0000000..c8cfb0d
 +  end
 +end
 +
++logic net_fifo_wr_en;
++assign net_fifo_wr_en = s_axis_tvalid && |s_axis_tkeep;
++
 +// FIFO to store input replication packets
 +xpm_fifo_sync #(
 +  .DOUT_RESET_VALUE    ("0"),
@@ -2734,7 +2815,7 @@ index 0000000..c8cfb0d
 +  .READ_MODE           ("fwft"),
 +  .WRITE_DATA_WIDTH    (DATA_WIDTH + KEEP_WIDTH + 1)
 +) net_fifo (
-+  .wr_en               (s_axis_tvalid),
++  .wr_en               (net_fifo_wr_en),
 +  .din                 ({s_axis_tdata, s_axis_tkeep, s_axis_tlast}),
 +  .wr_ack              (),
 +  .rd_en               (net_fifo_rd_en),
@@ -2799,6 +2880,9 @@ index 0000000..c8cfb0d
 +  .rd_rst_busy         (),
 +  .wr_rst_busy         ()
 +);
++
++logic mem_fifo_wr_en;
++assign mem_fifo_wr_en = s_axis_mem_tvalid && |s_axis_mem_tkeep;
 +
 +// FIFO to store input memory controller packets
 +xpm_fifo_sync #(
@@ -2944,10 +3028,10 @@ index 0000000..f7ded3c
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/vivado_ip/packet_parser.tcl b/src/hbm_subsystem/vivado_ip/packet_parser.tcl
 new file mode 100644
-index 0000000..d969959
+index 0000000..0d44fb4
 --- /dev/null
 +++ b/src/hbm_subsystem/vivado_ip/packet_parser.tcl
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,21 @@
 +set prj_root [file normalize ..]
 +set p4_filepath ${prj_root}/src/hbm_subsystem
 +
@@ -2965,6 +3049,7 @@ index 0000000..d969959
 +  CONFIG.AXIS_CLK_FREQ_MHZ {250} \
 +  CONFIG.CAM_MEM_CLK_FREQ_MHZ {250} \
 +  CONFIG.JSON_TIMESTAMP {1756741124} \
++  CONFIG.OUTPUT_METADATA_FOR_DROPPED_PKTS {true} \
 +  CONFIG.PKT_RATE {250} \
 +  CONFIG.TOTAL_LATENCY {32} \
 +} [get_ips packet_parser]
