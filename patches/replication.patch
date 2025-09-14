@@ -801,10 +801,10 @@ index 4571b97..cbb3e07 100644
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/memory_controller.sv b/src/hbm_subsystem/memory_controller/memory_controller.sv
 new file mode 100644
-index 0000000..22e6033
+index 0000000..f529f5a
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/memory_controller.sv
-@@ -0,0 +1,769 @@
+@@ -0,0 +1,771 @@
 +`timescale 1ns / 1ps
 +//////////////////////////////////////////////////////////////////////////////////
 +// Company: 
@@ -1424,53 +1424,29 @@ index 0000000..22e6033
 +    end
 +*/
 +
++
 +    //************************************************
-+    //         Write-ack/Read response handling 
++    //         Write-ack/Read Arbitrer FSM
 +    //************************************************
 + 
-+    // Master mux selection
-+    typedef enum logic [1:0] {RET_START, RET_IDLE, RET_ACK, RET_READ} sel_t;
++    // Arbitrer FSM states
++    typedef enum logic [1:0] {RET_IDLE, RET_TYPE, RET_ACK, RET_READ} sel_t;
 +    sel_t sel, sel_n;
 +
 +    logic sent_first_read;
 +
 +    always_comb begin
-+    sel_n = sel;
++        sel_n = sel;
 +
-+    // ---------------- Arbiter (ACK priority) ----------------
-+    case (sel)
-+        RET_START: begin //one cycle delay
-+        sel_n = RET_IDLE;
-+        end
-+
-+        RET_IDLE: begin
-+        if (m_ack_tvalid_buff && s2mm_rd_meta_tvalid) sel_n = RET_ACK;
-+        else if (m_tvalid_buff && mm2s_rd_meta_tvalid) sel_n = RET_READ;
-+        end
-+
-+        RET_ACK: begin
-+        // one-beat; once it handshakes, go idle
-+        if (m_ack_tvalid_buff && m_axis_tready && s2mm_rd_meta_tvalid) sel_n = RET_IDLE;
-+        end
-+
-+        RET_READ: begin
-+        // lock until last beat handshakes
-+        if (m_tvalid_buff && m_axis_tready && m_tlast_buff) sel_n = RET_IDLE;
-+        end
-+    endcase
-+    end
-+
-+    // ---------------- Maser Outputs ----------------
-+    always_comb begin
 +        // m_axi
 +        m_axis_tvalid = 1'b0;
-+        m_axis_tdata = '0;
-+        m_axis_tkeep = '0;
-+        m_axis_tlast = 1'b0;
++        m_axis_tdata  = '0;
++        m_axis_tkeep  = '0;
++        m_axis_tlast  = 1'b0;
 +
 +        m_axis_tuser_size = '0;
-+        m_axis_tuser_src = 16'h0000;
-+        m_axis_tuser_dst = 16'h0040;
++        m_axis_tuser_src  = 16'h0000;
++        m_axis_tuser_dst  = 16'h0040;
 +
 +        //MM2S Buffer tready
 +        m_tready_buff = 1'b0;
@@ -1486,66 +1462,92 @@ index 0000000..22e6033
 +        mm2s_rd_meta_tready= 0;
 +
 +        case (sel)
-+        // ---- Write ACK Path ----
++    
++        //Arbitrer IDLE state
++        RET_IDLE: begin 
++            if(abp_complete0)
++                sel_n = RET_TYPE;
++            else
++                sel_n= RET_IDLE;
++        end
++        
++        //Arbitrer TYPE state
++        RET_TYPE: begin
++        if (m_ack_tvalid_buff && s2mm_rd_meta_tvalid) 
++            sel_n = RET_ACK;
++        else if (m_tvalid_buff && mm2s_rd_meta_tvalid) 
++            sel_n = RET_READ;
++        else
++            sel_n = RET_TYPE;
++        end
++
++        //Arbitrer ACK state
 +        RET_ACK: begin
-+            m_axis_tvalid = m_ack_tvalid_buff;
-+            m_axis_tdata = m_ack_tdata_buff;
-+            m_axis_tkeep = m_ack_tkeep_buff;
-+            m_axis_tlast = m_ack_tlast_buff;
++            if (m_ack_tvalid_buff && m_axis_tready && s2mm_rd_meta_tvalid) begin
++                m_axis_tvalid = 1'b1;
++                m_ack_tready_buff = 1'b1;
++                m_axis_tdata = m_ack_tdata_buff;
++                m_axis_tkeep = m_ack_tkeep_buff;
++                m_axis_tlast = m_ack_tlast_buff;
 +
-+            m_ack_tready_buff = m_axis_tready;
++                s2mm_rd_meta_tready = 1'b1;
++                metadata_mem_out_valid = 1'b1;
++                metadata_mem_out = s2mm_rd_meta_tdata;
 +
-+            metadata_mem_out = s2mm_rd_meta_tdata;
-+            metadata_mem_out_valid = s2mm_rd_meta_tvalid;
-+
-+            if (m_ack_tvalid_buff && m_axis_tready) begin
-+                s2mm_rd_meta_tready = 1;
++                sel_n = RET_TYPE;
 +            end
 +        end
 +
-+        // ---- Read Burst Path ----
++        //Arbitrer READ state
 +        RET_READ: begin
-+            m_axis_tvalid = m_tvalid_buff;
-+            m_axis_tdata = m_tlast_buff ? {4'h0, m_tdata_buff[507:0]} : m_tdata_buff;
-+            m_axis_tkeep = m_tlast_buff ? {4'h0, m_tkeep_buff[59:0]}   : m_tkeep_buff;
++            if (m_tvalid_buff && m_axis_tready) begin            
++                m_axis_tvalid = 1'b1;
++                m_tready_buff = 1'b1;
++                m_axis_tdata  = m_tdata_buff;
++                m_axis_tkeep  = m_tkeep_buff;
++                m_axis_tlast  = m_tlast_buff;
 +
-+            m_axis_tlast = m_tlast_buff;
 +
-+            m_tready_buff = m_axis_tready;
++            
++                if (!sent_first_read) begin
++                    mm2s_rd_meta_tready = 1'b1;
++                    metadata_mem_out_valid = 1'b1;
++                    metadata_mem_out = mm2s_rd_meta_tdata;
++                end
 +
-+            if (!sent_first_read) begin
++                if(m_tlast_buff) begin
++                    sel_n = RET_TYPE;
++                end
 +
-+            metadata_mem_out = mm2s_rd_meta_tdata;
-+            metadata_mem_out_valid = mm2s_rd_meta_tvalid;
-+ 
-+            //m_tready_buff   = m_axis_tready; // gate first beat
-+
-+            if (m_tvalid_buff && m_axis_tready) begin
-+                mm2s_rd_meta_tready = 1;
 +            end
++            else begin
++                sel_n = RET_READ;
 +            end
 +        end
 +        endcase
 +    end
 +
-+    // ---------------- Track read burst progress ----------------
 +    always_ff @(posedge aclk or negedge aresetn) begin
 +        if (!aresetn) begin
 +        sel             <= RET_IDLE;
 +        sent_first_read <= 0;
-+        end else begin
++        end 
++        else begin
 +        sel <= sel_n;
 +
-+        if (sel == RET_READ) begin
-+            if (!sent_first_read && m_tvalid_buff && m_axis_tready)
-+            sent_first_read <= 1;
-+            if (m_tvalid_buff && m_axis_tready && m_tlast_buff)
-+            sent_first_read <= 0;
-+        end else begin
-+            sent_first_read <= 0;
-+        end
++            if (sel == RET_READ) begin
++                if (!sent_first_read && m_tvalid_buff && m_axis_tready)
++                    sent_first_read <= 1;
++                if (m_tvalid_buff && m_axis_tready && m_tlast_buff)
++                    sent_first_read <= 0;
++                end 
++            else begin
++                sent_first_read <= 0;
++            end
 +        end
 +    end
++
++    
 +
 +    //******************************************
 +    //         AXI-Stream Status Hardware 
@@ -1576,10 +1578,10 @@ index 0000000..22e6033
 +endmodule
 diff --git a/src/hbm_subsystem/memory_controller/metadata_buffer.sv b/src/hbm_subsystem/memory_controller/metadata_buffer.sv
 new file mode 100644
-index 0000000..b2c9f03
+index 0000000..ca0873a
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/metadata_buffer.sv
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,72 @@
 +// typedef struct packed {
 +//   logic          [31:0] ip;      // IPv4 address of the sender
 +//   logic          [47:0] mac;     // Mac address of the sender
@@ -1638,17 +1640,27 @@ index 0000000..b2c9f03
 +  end
 +end
 +
++  st_metadata m_rand;
++  always_comb begin
++  m_rand.ip = '0;
++  m_rand.id ='0;
++  m_rand.opcode ='0;
++  m_rand.key  = '0;
++  m_rand.mac = '0;
++  end
++
 +  assign m_valid = (count != 0);
-+  assign m_data  = mem[read_ptr];
++  assign m_data  = m_ready? mem[read_ptr] :m_rand;
++  
 +
 +endmodule
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/stream_buffer.sv b/src/hbm_subsystem/memory_controller/stream_buffer.sv
 new file mode 100644
-index 0000000..c2abfbc
+index 0000000..7d21732
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/stream_buffer.sv
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,94 @@
 +module stream_buffer #(
 +    parameter DATA_WIDTH = 512,
 +    parameter KEEP_WIDTH = DATA_WIDTH/8,
@@ -1722,10 +1734,142 @@ index 0000000..c2abfbc
 +    end
 +end
 +
++logic [DATA_WIDTH-1:0] tdata_int;
++logic [KEEP_WIDTH-1:0] tkeep_int;
++logic                  tlast_int;
++
++
++  always_comb begin
++    tdata_int = '0;
++    tkeep_int = '0;
++    tlast_int = '0;
++  end
++  
 +// Control signals & Read output
-+assign m_axis_tdata  = tdata_buffer[read_ptr];
-+assign m_axis_tkeep  = tkeep_buffer[read_ptr];
-+assign m_axis_tlast  = tlast_buffer[read_ptr];
++assign m_axis_tdata  = (m_axis_tvalid && m_axis_tready)? tdata_buffer[read_ptr]:tdata_int;
++assign m_axis_tkeep  = (m_axis_tvalid && m_axis_tready)? tkeep_buffer[read_ptr]:tkeep_int;
++assign m_axis_tlast  = (m_axis_tvalid && m_axis_tready)? tlast_buffer[read_ptr]:tlast_int;
++
++assign m_axis_tvalid = (count !=0);  //Not Empty
++assign s_axis_tready = (count != DEPTH); // Not Full
++
++endmodule
++
+diff --git a/src/hbm_subsystem/memory_controller/stream_buffer_mod.sv b/src/hbm_subsystem/memory_controller/stream_buffer_mod.sv
+new file mode 100644
+index 0000000..0d14799
+--- /dev/null
++++ b/src/hbm_subsystem/memory_controller/stream_buffer_mod.sv
+@@ -0,0 +1,116 @@
++`timescale 1ns / 1ps
++//////////////////////////////////////////////////////////////////////////////////
++// Company: 
++// Engineer: 
++// 
++// Create Date: 09/12/2025 01:38:29 AM
++// Design Name: 
++// Module Name: stream_buffer_mod
++// Project Name: 
++// Target Devices: 
++// Tool Versions: 
++// Description: 
++// 
++// Dependencies: 
++// 
++// Revision:
++// Revision 0.01 - File Created
++// Additional Comments:
++// 
++//////////////////////////////////////////////////////////////////////////////////
++
++
++module stream_buffer_mod #(
++    parameter DATA_WIDTH = 512,
++    parameter KEEP_WIDTH = DATA_WIDTH/8,
++    parameter DEPTH      = 64,
++    parameter PTR_WIDTH  = $clog2(DEPTH)
++)(
++    input logic aclk,
++    input logic aresetn,
++
++    input  logic [DATA_WIDTH-1:0] s_axis_tdata,
++    input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
++    input  logic                  s_axis_tvalid,
++    input  logic                  s_axis_tlast,
++    output logic                  s_axis_tready,
++
++
++    output logic [DATA_WIDTH-1:0] m_axis_tdata,
++    output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
++    output logic                  m_axis_tvalid,
++    output logic                  m_axis_tlast,
++    input  logic                  m_axis_tready
++    );
++
++// Memory Buffers
++logic [DEPTH-1:0][DATA_WIDTH-1:0] tdata_buffer;
++logic [DEPTH-1:0][KEEP_WIDTH-1:0] tkeep_buffer;
++logic [DEPTH-1:0]                 tlast_buffer;
++
++// Write & Read pointers
++logic [PTR_WIDTH-1:0] write_ptr;
++logic [PTR_WIDTH-1:0] read_ptr;
++
++// Counter
++logic [PTR_WIDTH:0] count;
++
++// Write logic
++always_ff @(posedge aclk, negedge aresetn) begin
++    if(!aresetn) begin
++        write_ptr <= '0;
++    end
++    else if (s_axis_tvalid && s_axis_tready) begin
++        tdata_buffer[write_ptr] <= s_axis_tdata;
++        tkeep_buffer[write_ptr] <= s_axis_tkeep;
++        tlast_buffer[write_ptr] <= s_axis_tlast;
++        write_ptr <= (write_ptr == DEPTH - 1)? 0: write_ptr + 1;
++    end
++end
++
++// Read logic
++always_ff @(posedge aclk, negedge aresetn) begin
++    if(!aresetn) begin
++        read_ptr <= '0;
++    end
++    else if (m_axis_tvalid && m_axis_tready) begin
++        read_ptr <= (read_ptr == DEPTH - 1)? 0: read_ptr + 1;
++    end
++end
++
++// Count logic
++always_ff @(posedge aclk, negedge aresetn) begin
++    if(!aresetn) begin
++        count <= '0;
++    end
++    else begin
++        case({s_axis_tvalid && s_axis_tready, m_axis_tvalid  && m_axis_tready})
++            2'b01: count <= count - 1; // Read only
++            2'b10: count <= count + 1; // Write only
++            2'b11: count <= count;    // Read + Write (NO change)
++            default: count <= count;
++        endcase
++    end
++end
++
++// Registered outputs
++always_ff @(posedge aclk or negedge aresetn) begin
++  if (!aresetn) begin
++    m_axis_tdata  <= '0;
++    m_axis_tkeep  <= '0;
++    m_axis_tlast  <= 1'b0;
++  end else if (m_axis_tvalid && m_axis_tready) begin
++    m_axis_tdata  <= tdata_buffer[read_ptr];
++    m_axis_tkeep  <= tkeep_buffer[read_ptr];
++    m_axis_tlast  <= tlast_buffer[read_ptr];
++  end
++end
++
++
 +
 +assign m_axis_tvalid = (count !=0);  //Not Empty
 +assign s_axis_tready = (count != DEPTH); // Not Full
@@ -2365,7 +2509,7 @@ index 0000000..ede3b90
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..1cf7be3
+index 0000000..8f5fd97
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
 @@ -0,0 +1,594 @@
@@ -2853,7 +2997,7 @@ index 0000000..1cf7be3
 +  .READ_DATA_WIDTH     (METADATA_WIDTH),
 +  .READ_MODE           ("fwft"),
 +  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
-+) metadata_fifo (
++) net_metadata_fifo (
 +  .wr_en               (metadata_in_valid),
 +  .din                 (metadata_in),
 +  .wr_ack              (),
@@ -2895,7 +3039,7 @@ index 0000000..1cf7be3
 +  .READ_DATA_WIDTH     (DATA_WIDTH + KEEP_WIDTH + 1),
 +  .READ_MODE           ("fwft"),
 +  .WRITE_DATA_WIDTH    (DATA_WIDTH + KEEP_WIDTH + 1)
-+) net_mem_fifo (
++) mem_fifo (
 +  .wr_en               (s_axis_mem_tvalid),
 +  .din                 ({s_axis_mem_tdata, s_axis_mem_tkeep, s_axis_mem_tlast}),
 +  .wr_ack              (),
@@ -2934,7 +3078,7 @@ index 0000000..1cf7be3
 +  .READ_DATA_WIDTH     (METADATA_WIDTH),
 +  .READ_MODE           ("fwft"),
 +  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
-+) metadata_mem_fifo (
++) mem_metadata_fifo (
 +  .wr_en               (metadata_mem_in_valid),
 +  .din                 (metadata_mem_in),
 +  .wr_ack              (),
