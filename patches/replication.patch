@@ -801,10 +801,10 @@ index 4571b97..cbb3e07 100644
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/memory_controller.sv b/src/hbm_subsystem/memory_controller/memory_controller.sv
 new file mode 100644
-index 0000000..f529f5a
+index 0000000..39caac0
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/memory_controller.sv
-@@ -0,0 +1,771 @@
+@@ -0,0 +1,904 @@
 +`timescale 1ns / 1ps
 +//////////////////////////////////////////////////////////////////////////////////
 +// Company: 
@@ -1035,26 +1035,70 @@ index 0000000..f529f5a
 +    logic                   s_tlast_buff;
 +    logic                   s_tready_buff;
 +
-+    stream_buffer #(
-+        .DATA_WIDTH (DATA_WIDTH),
-+        .KEEP_WIDTH (TKEEP_WIDTH),
-+        .DEPTH      (STREAM_FIFO_DEPTH)
++    // stream_buffer #(
++    //     .DATA_WIDTH (DATA_WIDTH),
++    //     .KEEP_WIDTH (TKEEP_WIDTH),
++    //     .DEPTH      (STREAM_FIFO_DEPTH)
++    // ) s2mm_stream_buffer_inst (
++    //     .aclk               (aclk),
++    //     .aresetn            (aresetn),
++    //     //Slave
++    //     .s_axis_tdata       (s_axis_tdata),
++    //     .s_axis_tkeep       (s_axis_tkeep),
++    //     .s_axis_tvalid      (s_axis_tvalid),
++    //     .s_axis_tlast       (s_axis_tlast),
++    //     .s_axis_tready      (s_axis_tready),
++    //     //Master
++    //     .m_axis_tdata       (s_tdata_buff),
++    //     .m_axis_tkeep       (s_tkeep_buff),
++    //     .m_axis_tvalid      (s_tvalid_buff),
++    //     .m_axis_tlast       (s_tlast_buff),
++    //     .m_axis_tready      (s_tready_buff)
++    // );
++
++    logic s2mm_stream_buffer_full;
++    logic s2mm_stream_buffer_empty;
++
++    assign s_axis_tready = !s2mm_stream_buffer_full;
++    assign s_tvalid_buff = !s2mm_stream_buffer_empty;
++
++    xpm_fifo_sync #(
++        .DOUT_RESET_VALUE    ("0"),
++        .ECC_MODE            ("no_ecc"),
++        .FIFO_MEMORY_TYPE    ("auto"),
++        .FIFO_READ_LATENCY   (1),
++        .FIFO_WRITE_DEPTH    (STREAM_FIFO_DEPTH),
++        .PROG_FULL_THRESH    (STREAM_FIFO_DEPTH-5),
++        .READ_DATA_WIDTH     (DATA_WIDTH + TKEEP_WIDTH + 1),
++        .READ_MODE           ("fwft"),
++        .WRITE_DATA_WIDTH    (DATA_WIDTH + TKEEP_WIDTH + 1)
 +    ) s2mm_stream_buffer_inst (
-+        .aclk               (aclk),
-+        .aresetn            (aresetn),
-+        //Slave
-+        .s_axis_tdata       (s_axis_tdata),
-+        .s_axis_tkeep       (s_axis_tkeep),
-+        .s_axis_tvalid      (s_axis_tvalid),
-+        .s_axis_tlast       (s_axis_tlast),
-+        .s_axis_tready      (s_axis_tready),
-+        //Master
-+        .m_axis_tdata       (s_tdata_buff),
-+        .m_axis_tkeep       (s_tkeep_buff),
-+        .m_axis_tvalid      (s_tvalid_buff),
-+        .m_axis_tlast       (s_tlast_buff),
-+        .m_axis_tready      (s_tready_buff)
-+    );
++        .wr_en               (s_axis_tvalid),
++        .din                 ({s_axis_tdata, s_axis_tkeep, s_axis_tlast}),
++        .wr_ack              (),
++        .rd_en               (s_tready_buff),
++        .data_valid          (),
++        .dout                ({s_tdata_buff, s_tkeep_buff, s_tlast_buff}),
++        .wr_data_count       (),
++        .rd_data_count       (),
++        .empty               (s2mm_stream_buffer_empty),
++        .full                (s2mm_stream_buffer_full),
++        .almost_empty        (),
++        .almost_full         (),
++        .overflow            (),
++        .underflow           (),
++        .prog_empty          (),
++        .prog_full           (),
++        .sleep               (1'b0),
++        .sbiterr             (),
++        .dbiterr             (),
++        .injectsbiterr       (1'b0),
++        .injectdbiterr       (1'b0),
++        .wr_clk              (aclk),
++        .rst                 (~aresetn),
++        .rd_rst_busy         (),
++        .wr_rst_busy         ()
++        );
 +
 +    //////////////////////////////////////////////////////////////////
 +    // Synchronization [Write]
@@ -1095,25 +1139,69 @@ index 0000000..f529f5a
 +    logic                   m_ack_tlast_buff;
 +    logic                   m_ack_tready_buff;
 +
-+    stream_buffer #(
-+        .DATA_WIDTH (DATA_WIDTH),
-+        .KEEP_WIDTH (TKEEP_WIDTH),
-+        .DEPTH      (STREAM_FIFO_DEPTH/2)
-+    ) writeack_stream_buffer_inst (
-+        .aclk               (aclk),
-+        .aresetn            (aresetn),
-+        //Slave
-+        .s_axis_tdata       (s_ack_tdata_buff),
-+        .s_axis_tkeep       (s_ack_tkeep_buff),
-+        .s_axis_tvalid      (s_ack_tvalid_buff),
-+        .s_axis_tlast       (s_ack_tlast_buff),
-+        .s_axis_tready      (s_ack_tready_buff),
-+        //Master
-+        .m_axis_tdata       (m_ack_tdata_buff),
-+        .m_axis_tkeep       (m_ack_tkeep_buff),
-+        .m_axis_tvalid      (m_ack_tvalid_buff),
-+        .m_axis_tlast       (m_ack_tlast_buff),
-+        .m_axis_tready      (m_ack_tready_buff)
++    // stream_buffer #(
++    //     .DATA_WIDTH (DATA_WIDTH),
++    //     .KEEP_WIDTH (TKEEP_WIDTH),
++    //     .DEPTH      (STREAM_FIFO_DEPTH/2)
++    // ) writeack_stream_buffer_inst (
++    //     .aclk               (aclk),
++    //     .aresetn            (aresetn),
++    //     //Slave
++    //     .s_axis_tdata       (s_ack_tdata_buff),
++    //     .s_axis_tkeep       (s_ack_tkeep_buff),
++    //     .s_axis_tvalid      (s_ack_tvalid_buff),
++    //     .s_axis_tlast       (s_ack_tlast_buff),
++    //     .s_axis_tready      (s_ack_tready_buff),
++    //     //Master
++    //     .m_axis_tdata       (m_ack_tdata_buff),
++    //     .m_axis_tkeep       (m_ack_tkeep_buff),
++    //     .m_axis_tvalid      (m_ack_tvalid_buff),
++    //     .m_axis_tlast       (m_ack_tlast_buff),
++    //     .m_axis_tready      (m_ack_tready_buff)
++    // );
++
++    logic wa_stream_buffer_full;
++    logic wa_stream_buffer_empty;
++
++    assign s_ack_tready_buff = !wa_stream_buffer_full;
++    assign m_ack_tvalid_buff = !wa_stream_buffer_empty;
++
++    xpm_fifo_sync #(
++        .DOUT_RESET_VALUE    ("0"),
++        .ECC_MODE            ("no_ecc"),
++        .FIFO_MEMORY_TYPE    ("auto"),
++        .FIFO_READ_LATENCY   (1),
++        .FIFO_WRITE_DEPTH    (STREAM_FIFO_DEPTH),
++        .PROG_FULL_THRESH    (STREAM_FIFO_DEPTH-5),
++        .READ_DATA_WIDTH     (DATA_WIDTH + TKEEP_WIDTH + 1),
++        .READ_MODE           ("fwft"),
++        .WRITE_DATA_WIDTH    (DATA_WIDTH + TKEEP_WIDTH + 1)
++    ) wa_stream_buffer_inst (
++        .wr_en               (s_ack_tvalid_buff),
++        .din                 ({s_ack_tdata_buff, s_ack_tkeep_buff, s_ack_tlast_buff}),
++        .wr_ack              (),
++        .rd_en               (m_ack_tready_buff),
++        .data_valid          (),
++        .dout                ({m_ack_tdata_buff, m_ack_tkeep_buff, m_ack_tlast_buff}),
++        .wr_data_count       (),
++        .rd_data_count       (),
++        .empty               (wa_stream_buffer_empty),
++        .full                (wa_stream_buffer_full),
++        .almost_empty        (),
++        .almost_full         (),
++        .overflow            (),
++        .underflow           (),
++        .prog_empty          (),
++        .prog_full           (),
++        .sleep               (1'b0),
++        .sbiterr             (),
++        .dbiterr             (),
++        .injectsbiterr       (1'b0),
++        .injectdbiterr       (1'b0),
++        .wr_clk              (aclk),
++        .rst                 (~aresetn),
++        .rd_rst_busy         (),
++        .wr_rst_busy         ()
 +    );
 +
 +    //////////////////////////////////////////////////////////////////
@@ -1127,26 +1215,71 @@ index 0000000..f529f5a
 +    logic                   m_tlast_buff;
 +    logic                   m_tready_buff;
 +
-+    stream_buffer #(
-+        .DATA_WIDTH (DATA_WIDTH),
-+        .KEEP_WIDTH (TKEEP_WIDTH),
-+        .DEPTH      (STREAM_FIFO_DEPTH*2)
++    // stream_buffer #(
++    //     .DATA_WIDTH (DATA_WIDTH),
++    //     .KEEP_WIDTH (TKEEP_WIDTH),
++    //     .DEPTH      (STREAM_FIFO_DEPTH*2)
++    // ) mm2s_stream_buffer_inst (
++    //     .aclk             (aclk),
++    //     .aresetn          (aresetn),
++    //     //Slave
++    //     .s_axis_tdata     (s_dm_axis_tdata),
++    //     .s_axis_tkeep     (s_dm_axis_tkeep),
++    //     .s_axis_tvalid    (s_dm_axis_tvalid),
++    //     .s_axis_tlast     (s_dm_axis_tlast),
++    //     .s_axis_tready    (s_dm_axis_tready),
++    //     //Master
++    //     .m_axis_tdata     (m_tdata_buff),
++    //     .m_axis_tkeep     (m_tkeep_buff),
++    //     .m_axis_tvalid    (m_tvalid_buff),
++    //     .m_axis_tlast     (m_tlast_buff),
++    //     .m_axis_tready    (m_tready_buff)
++    // );
++
++    logic mm2s_stream_buffer_full;
++    logic mm2s_stream_buffer_empty;
++
++    assign s_dm_axis_tready = !mm2s_stream_buffer_full;
++    assign m_tvalid_buff    = !mm2s_stream_buffer_empty;
++
++    xpm_fifo_sync #(
++        .DOUT_RESET_VALUE    ("0"),
++        .ECC_MODE            ("no_ecc"),
++        .FIFO_MEMORY_TYPE    ("auto"),
++        .FIFO_READ_LATENCY   (1),
++        .FIFO_WRITE_DEPTH    (STREAM_FIFO_DEPTH),
++        .PROG_FULL_THRESH    (STREAM_FIFO_DEPTH-5),
++        .READ_DATA_WIDTH     (DATA_WIDTH + TKEEP_WIDTH + 1),
++        .READ_MODE           ("fwft"),
++        .WRITE_DATA_WIDTH    (DATA_WIDTH + TKEEP_WIDTH + 1)
 +    ) mm2s_stream_buffer_inst (
-+        .aclk             (aclk),
-+        .aresetn          (aresetn),
-+        //Slave
-+        .s_axis_tdata     (s_dm_axis_tdata),
-+        .s_axis_tkeep     (s_dm_axis_tkeep),
-+        .s_axis_tvalid    (s_dm_axis_tvalid),
-+        .s_axis_tlast     (s_dm_axis_tlast),
-+        .s_axis_tready    (s_dm_axis_tready),
-+        //Master
-+        .m_axis_tdata     (m_tdata_buff),
-+        .m_axis_tkeep     (m_tkeep_buff),
-+        .m_axis_tvalid    (m_tvalid_buff),
-+        .m_axis_tlast     (m_tlast_buff),
-+        .m_axis_tready    (m_tready_buff)
++        .wr_en               (s_dm_axis_tvalid),
++        .din                 ({s_dm_axis_tdata, s_dm_axis_tkeep, s_dm_axis_tlast}),
++        .wr_ack              (),
++        .rd_en               (m_tready_buff),
++        .data_valid          (),
++        .dout                ({m_tdata_buff, m_tkeep_buff, m_tlast_buff}),
++        .wr_data_count       (),
++        .rd_data_count       (),
++        .empty               (mm2s_stream_buffer_empty),
++        .full                (mm2s_stream_buffer_full),
++        .almost_empty        (),
++        .almost_full         (),
++        .overflow            (),
++        .underflow           (),
++        .prog_empty          (),
++        .prog_full           (),
++        .sleep               (1'b0),
++        .sbiterr             (),
++        .dbiterr             (),
++        .injectsbiterr       (1'b0),
++        .injectdbiterr       (1'b0),
++        .wr_clk              (aclk),
++        .rst                 (~aresetn),
++        .rd_rst_busy         (),
++        .wr_rst_busy         ()
 +    );
++
 +
 +    //////////////////////////////////////////////////////////////////
 +    // Controller state machine S2MM & MM2S
@@ -1328,7 +1461,7 @@ index 0000000..f529f5a
 +        S2MM_READY: begin
 +            if(s_tvalid_buff && m_dm_axis_tready) begin //**MASTER-SIDE.
 +                s_tready_buff = 1'b1;
-+                m_dm_axis_tvalid = s_tvalid_buff;
++                m_dm_axis_tvalid = 1'b1;
 +                m_dm_axis_tdata = s_tlast_buff ? {4'hF, s_tdata_buff[507:0]} : s_tdata_buff;
 +                m_dm_axis_tkeep = s_tlast_buff ? {4'hF, s_tkeep_buff[59:0]}   : s_tkeep_buff;
 +                m_dm_axis_tlast = s_tlast_buff;
@@ -1576,6 +1709,7 @@ index 0000000..f529f5a
 +    end
 +
 +endmodule
+\ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/metadata_buffer.sv b/src/hbm_subsystem/memory_controller/metadata_buffer.sv
 new file mode 100644
 index 0000000..ca0873a
@@ -1657,7 +1791,7 @@ index 0000000..ca0873a
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/stream_buffer.sv b/src/hbm_subsystem/memory_controller/stream_buffer.sv
 new file mode 100644
-index 0000000..7d21732
+index 0000000..1be1f67
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/stream_buffer.sv
 @@ -0,0 +1,94 @@
@@ -1685,9 +1819,9 @@ index 0000000..7d21732
 +    );
 +
 +// Memory Buffers
-+logic [DEPTH-1:0][DATA_WIDTH-1:0] tdata_buffer;
-+logic [DEPTH-1:0][KEEP_WIDTH-1:0] tkeep_buffer;
-+logic [DEPTH-1:0]                 tlast_buffer;
++logic [DATA_WIDTH-1:0] tdata_buffer [DEPTH-1:0];
++logic [KEEP_WIDTH-1:0] tkeep_buffer [DEPTH-1:0];
++logic                  tlast_buffer [DEPTH-1:0];
 +
 +// Write & Read pointers
 +logic [PTR_WIDTH-1:0] write_ptr;
@@ -1984,7 +2118,7 @@ index 0000000..291d34f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
 new file mode 100644
-index 0000000..50d95a9
+index 0000000..4313e90
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_deparser.p4
 @@ -0,0 +1,239 @@
@@ -2160,7 +2294,7 @@ index 0000000..50d95a9
 +    hdr.udp.setValid();
 +    hdr.rep.setValid();
 +
-+    if (meta.opcode == READ_RESULT && meta.opcode == WRITE) {
++    if (meta.opcode == READ_RESULT || meta.opcode == WRITE) {
 +      hdr.key.setInvalid();
 +    } else {
 +      hdr.key.setValid();
@@ -2509,10 +2643,10 @@ index 0000000..ede3b90
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..8f5fd97
+index 0000000..fed2898
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
-@@ -0,0 +1,594 @@
+@@ -0,0 +1,619 @@
 +`timescale 1ns/1ps
 +
 +typedef struct packed {
@@ -2634,11 +2768,14 @@ index 0000000..8f5fd97
 +  logic                  tlast;
 +} st_beat;
 +
-+st_beat replica_mem [FIFO_DEPTH], replica_mem_next [FIFO_DEPTH];
-+logic [FIFO_PTR_WIDTH-1:0] write_ptr, write_ptr_next;
-+logic [FIFO_PTR_WIDTH-1:0] read_ptr, read_ptr_next;
++(* ram_style="block" *) st_beat replica_mem [FIFO_DEPTH];
++st_beat replica_mem_read, replica_mem_write;
++logic [FIFO_PTR_WIDTH-1:0] rep_write_ptr, rep_write_ptr_next;
++logic [FIFO_PTR_WIDTH-1:0] rep_read_cnt, rep_read_cnt_next, rep_read_ptr;
 +logic [NODE_PTR_WIDTH-1:0] nodes_count, nodes_count_next;
++logic                      rep_wr_en;
 +logic                      metadata_sent, metadata_sent_next;
++logic                [1:0] memory_delay, memory_delay_next;
 +
 +// Signals for keeping track of replicas' write acks
 +typedef struct packed {
@@ -2648,8 +2785,22 @@ index 0000000..8f5fd97
 +  logic                      is_running;
 +} st_ack;
 +
-+st_ack ack_table [FIFO_DEPTH], ack_table_next [FIFO_DEPTH];
++(* ram_style="block" *) st_ack ack_table [FIFO_DEPTH];
++st_ack ack_table_read, ack_table_write;
++logic [FIFO_PTR_WIDTH-1:0] ack_read_ptr, ack_write_ptr;
 +logic [FIFO_PTR_WIDTH-1:0] ack_id, ack_id_next;
++logic                      ack_wr_en;
++
++// Infers BRAM for replica_mem and ack_table
++always_ff @(posedge axis_clk) begin
++  if (rep_wr_en)
++    replica_mem[rep_write_ptr] <= replica_mem_write;
++  replica_mem_read <= replica_mem[rep_read_ptr];
++
++  if (ack_wr_en)
++    ack_table[ack_write_ptr] <= ack_table_write;
++  ack_table_read <= ack_table[ack_read_ptr];
++end
 +
 +// Keeps track of which side is using the output interface: 10 incoming packets, 01 memory controller
 +logic [1:0] out_busy, out_busy_next;
@@ -2663,41 +2814,28 @@ index 0000000..8f5fd97
 +  return 1'b0;
 +endfunction
 +
-+// Returns true if all replicas have replied
-+function logic ack_policy (input logic [31:0] id, input st_ack ack_table [FIFO_DEPTH]);
-+  if (ack_table[id].count + 1 == NUM_NODES - 1)
-+    return 1'b1;
-+  return 1'b0;
-+endfunction
-+
 +always_ff @(posedge axis_clk) begin
 +  if (!axis_rstn) begin
 +    net_state      <= ACCEPT_NET;
 +    mem_state      <= ACCEPT_MEM;
-+    ack_id         <= '0;
-+    read_ptr       <= '0;
-+    write_ptr      <= '0;
++    ack_id         <= 1;
++    rep_read_cnt   <= '0;
++    rep_write_ptr  <= '0;
 +    nodes_count    <= '0;
 +    metadata_sent  <= '0;
 +    out_busy       <= 1'b0;
-+    for (int i = 0; i < FIFO_DEPTH; i++) begin
-+      ack_table[i]   <= '0;
-+      replica_mem[i] <= '0;
-+    end
++    memory_delay   <= '0;
 +  end 
 +  else begin
 +    net_state      <= net_state_next;
 +    mem_state      <= mem_state_next;
 +    ack_id         <= ack_id_next;
-+    read_ptr       <= read_ptr_next;
-+    write_ptr      <= write_ptr_next;
++    rep_read_cnt   <= rep_read_cnt_next;
++    rep_write_ptr  <= rep_write_ptr_next;
 +    nodes_count    <= nodes_count_next;
 +    metadata_sent  <= metadata_sent_next;
 +    out_busy       <= out_busy_next;
-+    for (int i = 0; i < FIFO_DEPTH; i++) begin
-+      ack_table[i]   <= ack_table_next[i];
-+      replica_mem[i] <= replica_mem_next[i];
-+    end
++    memory_delay   <= memory_delay_next;
 +  end
 +end
 +
@@ -2711,10 +2849,18 @@ index 0000000..8f5fd97
 +
 +  ack_id_next        = ack_id;
 +  out_busy_next      = out_busy;
-+  read_ptr_next      = read_ptr;
-+  write_ptr_next     = write_ptr;
 +  nodes_count_next   = nodes_count;
 +  metadata_sent_next = metadata_sent;
++  memory_delay_next  = memory_delay;
++  rep_read_cnt_next  = rep_read_cnt;
++  rep_write_ptr_next = rep_write_ptr;
++  replica_mem_write  = 0;
++  ack_table_write    = 0;
++  rep_read_ptr       = 0;
++  ack_read_ptr       = 0;
++  ack_write_ptr      = 0;
++  rep_wr_en          = 1'b0;
++  ack_wr_en          = 1'b0;
 +
 +  m_axis_tvalid = 0;
 +  m_axis_tdata  = 0;
@@ -2731,11 +2877,6 @@ index 0000000..8f5fd97
 +
 +  metadata_mem_out_valid = 0;
 +  metadata_mem_out       = 0;
-+
-+  for (int i = 0; i < FIFO_DEPTH; i++) begin
-+    replica_mem_next[i] = replica_mem[i];
-+    ack_table_next[i]   = ack_table[i];
-+  end
 +
 +  // Process incoming packets
 +  case (net_state)
@@ -2759,25 +2900,27 @@ index 0000000..8f5fd97
 +            metadata_mem_out       = net_meta_out;
 +            if (m_axis_mem_tready) begin
 +              if (is_leader(net_meta_out.key)) begin
-+                net_state_next   = WRITE_REP;
-+                read_ptr_next    = 0;
-+                write_ptr_next   = 0;
-+                nodes_count_next = 0;
++                net_state_next      = WRITE_REP;
++                rep_read_cnt_next   = 0;
++                rep_write_ptr_next  = 0;
++                nodes_count_next    = 0;
 +
 +                // Save the first beat for replicas
 +                if (m_axis_mem_tvalid) begin
-+                  replica_mem_next[write_ptr].tdata = net_fifo_out_tdata;
-+                  replica_mem_next[write_ptr].tkeep = net_fifo_out_tkeep;
-+                  replica_mem_next[write_ptr].tlast = net_fifo_out_tlast;
-+                  write_ptr_next = 1;
++                  replica_mem_write.tdata = net_fifo_out_tdata;
++                  replica_mem_write.tkeep = net_fifo_out_tkeep;
++                  replica_mem_write.tlast = net_fifo_out_tlast;
++                  rep_write_ptr_next = 1;
 +                end
 +
 +                // Start keeping track of acks for this write
-+                ack_table_next[ack_id].meta       = net_meta_out;
-+                ack_table_next[ack_id].id         = ack_id;
-+                ack_table_next[ack_id].count      = 0;
-+                ack_table_next[ack_id].is_running = 1'b1;
-+                ack_id_next = ack_id + 1;
++                ack_table_write.meta       = net_meta_out;
++                ack_table_write.id         = ack_id;
++                ack_table_write.count      = 0;
++                ack_table_write.is_running = 1'b1;
++                ack_write_ptr = ack_id;
++                ack_wr_en     = 1'b1;
++                ack_id_next   = ack_id + 1;
 +              end
 +              else begin
 +                net_state_next = WRITE_MEM;
@@ -2786,14 +2929,16 @@ index 0000000..8f5fd97
 +            end
 +          end
 +          WRITE_ACK: begin
-+            if (is_leader(net_meta_out.key) && ack_table[net_meta_out.id].is_running) begin
-+              if (ack_policy(net_meta_out.id, ack_table)) begin
-+                if (!out_busy[1]) begin
++            memory_delay_next = 1;
++            ack_read_ptr      = net_meta_out.id;
++            ack_write_ptr     = net_meta_out.id;
++            if (memory_delay) begin
++              if (is_leader(net_meta_out.key) && ack_table_read.is_running) begin
++                if (!out_busy[1] && ack_table_read.count + 1 == NUM_NODES - 1) begin
 +                  out_busy_next[0] = 1'b1;
-+                  ack_table_next[net_meta_out.id].is_running = 1'b0;
 +
 +                  metadata_out_valid  = 1'b1;
-+                  metadata_out        = ack_table[net_meta_out.id].meta;
++                  metadata_out        = ack_table_read.meta;
 +                  metadata_out.opcode = WRITE_ACK;
 +
 +                  m_axis_tvalid = 1'b1;
@@ -2802,21 +2947,24 @@ index 0000000..8f5fd97
 +                  m_axis_tlast  = 1'b1;
 +
 +                  if (m_axis_tready) begin
++                    ack_table_write.is_running = 1'b0;
++                    ack_wr_en        = 1'b1;
 +                    out_busy_next[0] = 1'b0;
 +                    net_meta_rd_en   = 1'b1;
 +                    net_fifo_rd_en   = 1'b1; 
 +                  end
 +                end
++                else begin
++                  ack_table_write.count = ack_table_read.count + 1;
++                  ack_wr_en      = 1'b1;
++                  net_meta_rd_en = 1'b1;
++                  net_fifo_rd_en = 1'b1; 
++                end
 +              end
 +              else begin
-+                ack_table_next[net_meta_out.id].count = ack_table[net_meta_out.id].count + 1;
 +                net_meta_rd_en = 1'b1;
 +                net_fifo_rd_en = 1'b1; 
 +              end
-+            end
-+            else begin
-+              net_meta_rd_en = 1'b1;
-+              net_fifo_rd_en = 1'b1; 
 +            end
 +          end
 +          default:;
@@ -2833,6 +2981,9 @@ index 0000000..8f5fd97
 +        net_state_next = ACCEPT_NET;
 +    end
 +    WRITE_REP: begin
++      //FIXME: write pointer should always be at least one higher than read pointer
++      rep_read_ptr = rep_read_cnt;
++
 +      // While writing to the first node, also move the write to the memory controller
 +      if (nodes_count == 0) begin
 +        m_axis_mem_tvalid = !net_fifo_empty;
@@ -2842,39 +2993,47 @@ index 0000000..8f5fd97
 +        net_fifo_rd_en = m_axis_mem_tready;
 +
 +        if (m_axis_mem_tvalid && m_axis_mem_tready) begin
-+          replica_mem_next[write_ptr].tdata = net_fifo_out_tdata;
-+          replica_mem_next[write_ptr].tkeep = net_fifo_out_tkeep;
-+          replica_mem_next[write_ptr].tlast = net_fifo_out_tlast;
-+          write_ptr_next = write_ptr + 1;
++          replica_mem_write.tdata = net_fifo_out_tdata;
++          replica_mem_write.tkeep = net_fifo_out_tkeep;
++          replica_mem_write.tlast = net_fifo_out_tlast;
++          rep_write_ptr_next = rep_write_ptr + 1;
++          rep_wr_en = 1'b1;
 +        end
 +      end
 +
-+      //FIXME: write pointer should always be at least one higher than read pointer
-+      if (!out_busy[1] && write_ptr != 0) begin
-+        out_busy_next[0] = 1'b1;
-+        m_axis_tvalid = 1'b1;
-+        m_axis_tdata  = replica_mem[read_ptr].tdata;
-+        m_axis_tkeep  = replica_mem[read_ptr].tkeep;
-+        m_axis_tlast  = replica_mem[read_ptr].tlast;
++      // Wait for the replica memory to output first value
++      if (memory_delay != 2)
++        memory_delay_next = memory_delay + 1;
++      else begin
++        if (!out_busy[1]) begin
++          out_busy_next[0] = 1'b1;
++          m_axis_tvalid = 1'b1;
++          m_axis_tdata  = replica_mem_read.tdata;
++          m_axis_tkeep  = replica_mem_read.tkeep;
++          m_axis_tlast  = replica_mem_read.tlast;
 +
-+        if (read_ptr == 0) begin
-+          metadata_out_valid = 1'b1;
-+          metadata_out       = net_meta_out;
-+          metadata_out.id    = ack_table[net_meta_out.id].id;
-+          metadata_out.ip    = NODES_IPS[nodes_count + 1];
-+        end
++          if (rep_read_cnt == 0) begin
++            metadata_out_valid = 1'b1;
++            metadata_out       = net_meta_out;
++            metadata_out.id    = ack_id - 1;
++            metadata_out.ip    = NODES_IPS[nodes_count + 1];
++          end
 +
-+        if (m_axis_tready) begin
-+          read_ptr_next = read_ptr + 1;
-+          if (m_axis_tlast) begin
-+            if (nodes_count + 1 == NUM_NODES - 1) begin
-+              net_state_next   = ACCEPT_NET;
-+              net_meta_rd_en   = 1'b1;
-+              out_busy_next[0] = 1'b0;
++          if (m_axis_tready) begin
++            rep_read_ptr      = rep_read_cnt + 1;
++            rep_read_cnt_next = rep_read_cnt + 1;
++            if (m_axis_tlast) begin
++              if (nodes_count + 1 == NUM_NODES - 1) begin
++                net_state_next    = ACCEPT_NET;
++                net_meta_rd_en    = 1'b1;
++                out_busy_next[0]  = 1'b0;
++                memory_delay_next = 1'b0;
++              end
++              rep_read_cnt_next  = 0;
++              rep_read_ptr       = 0;
++              metadata_sent_next = 1'b0;
++              nodes_count_next   = nodes_count + 1;
 +            end
-+            read_ptr_next      = 0;
-+            metadata_sent_next = 1'b0;
-+            nodes_count_next   = nodes_count + 1;
 +          end
 +        end
 +      end
