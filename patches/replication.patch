@@ -877,10 +877,10 @@ index 0000000..bfa4dc3
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/memory_controller.sv b/src/hbm_subsystem/memory_controller/memory_controller.sv
 new file mode 100644
-index 0000000..0aeeb66
+index 0000000..cd4b971
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/memory_controller.sv
-@@ -0,0 +1,931 @@
+@@ -0,0 +1,940 @@
 +`timescale 1ns / 1ps
 +//////////////////////////////////////////////////////////////////////////////////
 +// Company: 
@@ -922,7 +922,6 @@ index 0000000..0aeeb66
 +    
 +    // HBM Stack Interface complete (FSM Starters)
 +    input logic                         abp_complete0,
-+    input logic                         abp_complete1,
 +
 +    // Master AXI-Stream signals [To Replication Engine]
 +    input  logic                        m_axis_tready,
@@ -930,9 +929,6 @@ index 0000000..0aeeb66
 +    output logic [TKEEP_WIDTH-1:0]      m_axis_tkeep,
 +    output logic                        m_axis_tlast,
 +    output logic                        m_axis_tvalid,
-+    output logic [TUSER_WIDTH-1:0]      m_axis_tuser_size,
-+    output logic [TUSER_WIDTH-1:0]      m_axis_tuser_src,
-+    output logic [TUSER_WIDTH-1:0]      m_axis_tuser_dst,
 +
 +    // Master AXI-Stream signals [From DataMover]
 +    output logic                        s_dm_axis_tready,
@@ -947,9 +943,6 @@ index 0000000..0aeeb66
 +    input  logic [TKEEP_WIDTH-1:0]      s_axis_tkeep,
 +    input  logic                        s_axis_tlast,
 +    input  logic                        s_axis_tvalid,
-+    input  logic [TUSER_WIDTH-1:0]      s_axis_tuser_size,
-+    input  logic [TUSER_WIDTH-1:0]      s_axis_tuser_src,
-+    input  logic [TUSER_WIDTH-1:0]      s_axis_tuser_dst,
 +
 +    // Slave AXI-Stream signals [To DataMover]
 +    input  logic                        m_dm_axis_tready,
@@ -1491,11 +1484,12 @@ index 0000000..0aeeb66
 +                        cmd_next = C_VALID;
 +                    end
 +                end
++                default:;
 +            endcase
 +
 +
 +        end
-+
++        default:;
 +        endcase
 +    end
 +
@@ -1572,7 +1566,7 @@ index 0000000..0aeeb66
 +            else
 +                s2mm_next = S2MM_READY;
 +        end
-+
++        default:;
 +        endcase
 +    end
 +
@@ -1676,10 +1670,6 @@ index 0000000..0aeeb66
 +        m_axis_tkeep  = '0;
 +        m_axis_tlast  = 1'b0;
 +
-+        m_axis_tuser_size = '0;
-+        m_axis_tuser_src  = 16'h0000;
-+        m_axis_tuser_dst  = 16'h0040;
-+
 +        //MM2S Buffer tready
 +        m_tready_buff = 1'b0;
 +        //Write Ack Buffer tready
@@ -1715,6 +1705,24 @@ index 0000000..0aeeb66
 +        else
 +            sel_n = RET_TYPE;
 +        end
++
++        // RET_ACK: begin
++        //     if (s2mm_rd_meta_tvalid && m_bvalid_buff) begin
++        //         m_axis_tvalid = 1'b1;
++        //         m_axis_tdata = '0;
++        //         m_axis_tkeep = '0;
++        //         m_axis_tlast = 1'b1;
++
++        //         metadata_mem_out_valid = 1'b1;
++        //         metadata_mem_out = s2mm_rd_meta_tdata;
++
++        //         if (m_axis_tready) begin
++        //             m_bready_buff = 1'b1;
++        //             s2mm_rd_meta_tready = 1'b1;
++        //             sel_n = RET_TYPE;
++        //         end
++        //     end
++        // end
 +
 +        //Arbitrer ACK state
 +        RET_ACK: begin
@@ -1760,6 +1768,7 @@ index 0000000..0aeeb66
 +                sel_n = RET_READ;
 +            end
 +        end
++        default:;
 +        endcase
 +    end
 +
@@ -1999,10 +2008,10 @@ index 0000000..291d34f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
 new file mode 100644
-index 0000000..4a618c4
+index 0000000..351f4ec
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_deparser.p4
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,245 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -2172,7 +2181,8 @@ index 0000000..4a618c4
 +      ip_length = IP_HEADER_SIZE + udp_length;
 +      hdr.key.setInvalid();
 +    } else if (meta.opcode == WRITE_ACK) {
-+      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE;
++      // 64 byte padding to reach minimum size
++      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE + 64;  
 +      ip_length = IP_HEADER_SIZE + udp_length;
 +      hdr.key.setValid();
 +    } else {
@@ -2529,7 +2539,7 @@ index 0000000..d99a087
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..52b5289
+index 0000000..71131d4
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
 @@ -0,0 +1,620 @@
@@ -2828,8 +2838,8 @@ index 0000000..52b5289
 +                  metadata_out.opcode = WRITE_ACK;
 +
 +                  m_axis_tvalid = 1'b1;
-+                  m_axis_tdata  = '0;
-+                  m_axis_tkeep  = '0;
++                  m_axis_tdata  = '1;
++                  m_axis_tkeep  = '1;
 +                  m_axis_tlast  = 1'b1;
 +
 +                  if (m_axis_tready) begin
@@ -2957,8 +2967,8 @@ index 0000000..52b5289
 +              metadata_out.opcode = WRITE_ACK;
 +
 +              m_axis_tvalid = 1'b1;
-+              m_axis_tdata  = '0;
-+              m_axis_tkeep  = '0;
++              m_axis_tdata  = '1;
++              m_axis_tkeep  = '1;
 +              m_axis_tlast  = 1'b1;
 +
 +              // TODO: If node is leader, than one ack is mistakenly sent immediately back
