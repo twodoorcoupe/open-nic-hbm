@@ -292,14 +292,14 @@ index 97fedbc..2f54b9e 100644
  
    # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..cbb3e07 100644
+index 4571b97..fdcf31b 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
 @@ -1,4 +1,8 @@
 -module hbm_subsystem (
 +module hbm_subsystem #(
-+  parameter logic [31:0] IP_ADDRESS     = 5,
-+  parameter logic [47:0] MAC_ADDRESS    = 7,
++  parameter logic [31:0] IP_ADDRESS     = 32'hC0643301,
++  parameter logic [47:0] MAC_ADDRESS    = 48'h020A35070000,
 +  parameter              METADATA_WIDTH = 161
 +) (
    input   [63:0] s_axi_araddr,
@@ -495,6 +495,25 @@ index 4571b97..cbb3e07 100644
 +  logic [METADATA_WIDTH-1:0] parser_metadata_out;
 +  logic                      parser_metadata_out_valid;
 +
++  // Buffer the switch for the packet filter
++  logic is_replication;
++  logic is_replication_buf;
++
++  always @(posedge axi_clk) begin
++    if(~axi_rstn)
++    begin
++      is_replication_buf <= 1'b0;
++    end
++    else begin
++      if (parser_metadata_out_valid) 
++        is_replication_buf <= parser_metadata_out[0];
++      else
++        is_replication_buf <= is_replication_buf;
++    end
++  end
++
++  assign is_replication = parser_metadata_out_valid ? parser_metadata_out[0] : is_replication_buf;
++
 +  replication_engine replication_engine_inst (
 +    .s_axis_tvalid          (axis_filter_to_engine_tvalid),
 +    .s_axis_tdata           (axis_filter_to_engine_tdata),
@@ -502,7 +521,7 @@ index 4571b97..cbb3e07 100644
 +    .s_axis_tlast           (axis_filter_to_engine_tlast),
 +    .s_axis_tready          (axis_filter_to_engine_tready),
 +    .metadata_in            (parser_metadata_out[METADATA_WIDTH-1:1]),
-+    .metadata_in_valid      (parser_metadata_out_valid),
++    .metadata_in_valid      (parser_metadata_out_valid && is_replication),
 +
 +    .m_axis_tvalid          (axis_engine_to_deparser_tvalid),
 +    .m_axis_tdata           (axis_engine_to_deparser_tdata),
@@ -650,25 +669,6 @@ index 4571b97..cbb3e07 100644
 +    .s_axis_aresetn          (vitis_net_p4_resetn)
 +  );
 +
-+  // Buffer the switch for the packet filter
-+  logic is_replication;
-+  logic is_replication_buf;
-+
-+  always @(posedge axi_clk) begin
-+    if(~axi_rstn)
-+    begin
-+      is_replication_buf <= 1'b0;
-+    end
-+    else begin
-+      if (parser_metadata_out_valid) 
-+        is_replication_buf <= parser_metadata_out[0];
-+      else
-+        is_replication_buf <= is_replication_buf;
-+    end
-+  end
-+
-+  assign is_replication = parser_metadata_out_valid ? parser_metadata_out[0] : is_replication_buf;
-+
 +  logic    [1:0] axis_filter_out_tvalid;
 +  logic [1023:0] axis_filter_out_tdata;
 +  logic  [127:0] axis_filter_out_tkeep;
@@ -714,12 +714,12 @@ index 4571b97..cbb3e07 100644
 +  assign axis_filter_to_engine_tlast  = axis_filter_out_tlast[1];
 +  assign axis_filter_out_tready[1]    = axis_filter_to_engine_tready;
 +
-+  logic        replication_tuser;
++  logic [47:0] replication_tuser;
 +  logic [47:0] cmac_tuser;
-+  assign replication_tuser          = {16'h0, 16'h0, 16'h0040};
-+  assign m_axis_cmac_h2c_tuser_size = cmac_tuser[47-:16];
-+  assign m_axis_cmac_h2c_tuser_src  = cmac_tuser[31-:16];
-+  assign m_axis_cmac_h2c_tuser_dst  = cmac_tuser[15-:16];
++  assign  replication_tuser          = {16'h0, 16'h0, 16'h0040};
++  assign  m_axis_cmac_h2c_tuser_size = cmac_tuser[47-:16];
++  assign  m_axis_cmac_h2c_tuser_src  = cmac_tuser[31-:16];
++  assign  m_axis_cmac_h2c_tuser_dst  = cmac_tuser[15-:16];
 +
 +  packet_arbiter packet_arbiter_inst (
 +    .s_axis_tvalid           ({axis_deparser_to_arbiter_tvalid, s_axis_qdma_h2c_tvalid}), 
@@ -799,12 +799,88 @@ index 4571b97..cbb3e07 100644
 +
 +endmodule
 \ No newline at end of file
+diff --git a/src/hbm_subsystem/memory_controller/bvalid_buffer.sv b/src/hbm_subsystem/memory_controller/bvalid_buffer.sv
+new file mode 100644
+index 0000000..bfa4dc3
+--- /dev/null
++++ b/src/hbm_subsystem/memory_controller/bvalid_buffer.sv
+@@ -0,0 +1,69 @@
++// typedef struct packed {
++//   logic          [31:0] ip;      // IPv4 address of the sender
++//   logic          [47:0] mac;     // Mac address of the sender
++//   logic           [7:0] id;      // Operation identifier used to distinguish consecutive writes
++//   logic           [7:0] opcode;  // Operation code
++//   logic          [63:0] key;
++// } st_metadata;
++
++module bvalid_buffer #(
++  parameter DEPTH      = 64,
++  parameter PTR_WIDTH  = $clog2(DEPTH)
++)(
++  input  logic         aclk,
++  input  logic         aresetn,
++
++  // Slave side (no ready)
++  input  logic         s_bresp,
++  input  logic         s_bvalid,
++
++  // Master side (with ready)
++  output logic         m_bvalid,
++  output logic         m_bresp,
++  input  logic         m_bready
++
++);
++
++  // Memory Buffers
++  logic mem [DEPTH-1:0];
++
++  // Write & Read pointers
++  logic [PTR_WIDTH-1:0] write_ptr;
++  logic [PTR_WIDTH-1:0] read_ptr;
++
++  // Counter
++  logic [PTR_WIDTH-1:0] count;
++
++always_ff @(posedge aclk or negedge aresetn) begin
++  if (!aresetn) begin
++    write_ptr <= '0;
++    read_ptr  <= '0;
++    count     <= '0;
++  end 
++  else begin
++    // Write
++    if (s_bvalid) begin
++      mem[write_ptr] <= s_bresp;
++      write_ptr      <= write_ptr + 1;
++      if (count < (DEPTH-1))
++        count <= count + 1;
++    end
++
++    // Read
++    if (m_bvalid && m_bready) begin
++      read_ptr <= read_ptr + 1;
++      count    <= count - 1;
++    end
++  end
++end
++
++  logic m_resp;
++  always_comb begin
++  m_resp = 1'b0;
++  end
++
++  assign m_bvalid = (count != 0);
++  assign m_bresp  = m_bready? mem[read_ptr] :m_resp;
++  
++
++endmodule
+\ No newline at end of file
 diff --git a/src/hbm_subsystem/memory_controller/memory_controller.sv b/src/hbm_subsystem/memory_controller/memory_controller.sv
 new file mode 100644
-index 0000000..39caac0
+index 0000000..0aeeb66
 --- /dev/null
 +++ b/src/hbm_subsystem/memory_controller/memory_controller.sv
-@@ -0,0 +1,904 @@
+@@ -0,0 +1,931 @@
 +`timescale 1ns / 1ps
 +//////////////////////////////////////////////////////////////////////////////////
 +// Company: 
@@ -956,6 +1032,29 @@ index 0000000..39caac0
 +                accumulator ^= matrix[i];
 +        return accumulator;
 +    endfunction
++
++    //////////////////////////////////////////////////////////////////
++    // B VALID Buffers
++    //////////////////////////////////////////////////////////////////
++
++    // Global Bvalid Buffer signals
++    logic         m_bvalid_buff;
++    logic         m_bresp_buff;
++    logic         m_bready_buff;
++
++    bvalid_buffer #(
++        .DEPTH(CMD_FIFO_DEPTH)
++    ) bvalid_in_buffer (
++        .aclk               (aclk),
++        .aresetn            (aresetn),
++
++        .s_bvalid           (s_axis_s2mm_sts_tvalid),
++        .s_bresp            (s_axis_s2mm_sts_tdata[7]),
++
++        .m_bvalid           (m_bvalid_buff),
++        .m_bresp            (m_bresp_buff),
++        .m_bready           (m_bready_buff)
++    );
 +
 +    //////////////////////////////////////////////////////////////////
 +    // Metadata Buffers
@@ -1585,6 +1684,8 @@ index 0000000..39caac0
 +        m_tready_buff = 1'b0;
 +        //Write Ack Buffer tready
 +        m_ack_tready_buff = 1'b0;
++        //Bvalid Buffer tready
++        m_bready_buff = 1'b0;
 +
 +        metadata_mem_out = '0;
 +        metadata_mem_out_valid = 1'b0;
@@ -1604,9 +1705,10 @@ index 0000000..39caac0
 +                sel_n= RET_IDLE;
 +        end
 +        
++
 +        //Arbitrer TYPE state
 +        RET_TYPE: begin
-+        if (m_ack_tvalid_buff && s2mm_rd_meta_tvalid) 
++        if (m_ack_tvalid_buff && s2mm_rd_meta_tvalid && m_bvalid_buff) 
 +            sel_n = RET_ACK;
 +        else if (m_tvalid_buff && mm2s_rd_meta_tvalid) 
 +            sel_n = RET_READ;
@@ -1616,7 +1718,8 @@ index 0000000..39caac0
 +
 +        //Arbitrer ACK state
 +        RET_ACK: begin
-+            if (m_ack_tvalid_buff && m_axis_tready && s2mm_rd_meta_tvalid) begin
++            if (m_ack_tvalid_buff && m_axis_tready && s2mm_rd_meta_tvalid && m_bvalid_buff) begin
++                m_bready_buff = 1'b1;
 +                m_axis_tvalid = 1'b1;
 +                m_ack_tready_buff = 1'b1;
 +                m_axis_tdata = m_ack_tdata_buff;
@@ -1636,8 +1739,8 @@ index 0000000..39caac0
 +            if (m_tvalid_buff && m_axis_tready) begin            
 +                m_axis_tvalid = 1'b1;
 +                m_tready_buff = 1'b1;
-+                m_axis_tdata  = m_tdata_buff;
-+                m_axis_tkeep  = m_tkeep_buff;
++                m_axis_tdata  = m_tlast_buff ? {4'h0, m_tdata_buff[507:0]} : m_tdata_buff;
++                m_axis_tkeep  = m_tlast_buff ? {4'h0, m_tkeep_buff[59:0]}  : m_tkeep_buff;
 +                m_axis_tlast  = m_tlast_buff;
 +
 +
@@ -1789,228 +1892,6 @@ index 0000000..ca0873a
 +
 +endmodule
 \ No newline at end of file
-diff --git a/src/hbm_subsystem/memory_controller/stream_buffer.sv b/src/hbm_subsystem/memory_controller/stream_buffer.sv
-new file mode 100644
-index 0000000..1be1f67
---- /dev/null
-+++ b/src/hbm_subsystem/memory_controller/stream_buffer.sv
-@@ -0,0 +1,94 @@
-+module stream_buffer #(
-+    parameter DATA_WIDTH = 512,
-+    parameter KEEP_WIDTH = DATA_WIDTH/8,
-+    parameter DEPTH      = 64,
-+    parameter PTR_WIDTH  = $clog2(DEPTH)
-+)(
-+    input logic aclk,
-+    input logic aresetn,
-+
-+    input  logic [DATA_WIDTH-1:0] s_axis_tdata,
-+    input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
-+    input  logic                  s_axis_tvalid,
-+    input  logic                  s_axis_tlast,
-+    output logic                  s_axis_tready,
-+
-+
-+    output logic [DATA_WIDTH-1:0] m_axis_tdata,
-+    output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
-+    output logic                  m_axis_tvalid,
-+    output logic                  m_axis_tlast,
-+    input  logic                  m_axis_tready
-+    );
-+
-+// Memory Buffers
-+logic [DATA_WIDTH-1:0] tdata_buffer [DEPTH-1:0];
-+logic [KEEP_WIDTH-1:0] tkeep_buffer [DEPTH-1:0];
-+logic                  tlast_buffer [DEPTH-1:0];
-+
-+// Write & Read pointers
-+logic [PTR_WIDTH-1:0] write_ptr;
-+logic [PTR_WIDTH-1:0] read_ptr;
-+
-+// Counter
-+logic [PTR_WIDTH:0] count;
-+
-+// Write logic
-+always_ff @(posedge aclk, negedge aresetn) begin
-+    if(!aresetn) begin
-+        write_ptr <= '0;
-+    end
-+    else if (s_axis_tvalid && s_axis_tready) begin
-+        tdata_buffer[write_ptr] <= s_axis_tdata;
-+        tkeep_buffer[write_ptr] <= s_axis_tkeep;
-+        tlast_buffer[write_ptr] <= s_axis_tlast;
-+        write_ptr <= (write_ptr == DEPTH - 1)? 0: write_ptr + 1;
-+    end
-+end
-+
-+// Read logic
-+always_ff @(posedge aclk, negedge aresetn) begin
-+    if(!aresetn) begin
-+        read_ptr <= '0;
-+    end
-+    else if (m_axis_tvalid && m_axis_tready) begin
-+        read_ptr <= (read_ptr == DEPTH - 1)? 0: read_ptr + 1;
-+    end
-+end
-+
-+// Count logic
-+always_ff @(posedge aclk, negedge aresetn) begin
-+    if(!aresetn) begin
-+        count <= '0;
-+    end
-+    else begin
-+        case({s_axis_tvalid && s_axis_tready, m_axis_tvalid  && m_axis_tready})
-+            2'b01: count <= count - 1; // Read only
-+            2'b10: count <= count + 1; // Write only
-+            2'b11: count <= count;    // Read + Write (NO change)
-+            default: count <= count;
-+        endcase
-+    end
-+end
-+
-+logic [DATA_WIDTH-1:0] tdata_int;
-+logic [KEEP_WIDTH-1:0] tkeep_int;
-+logic                  tlast_int;
-+
-+
-+  always_comb begin
-+    tdata_int = '0;
-+    tkeep_int = '0;
-+    tlast_int = '0;
-+  end
-+  
-+// Control signals & Read output
-+assign m_axis_tdata  = (m_axis_tvalid && m_axis_tready)? tdata_buffer[read_ptr]:tdata_int;
-+assign m_axis_tkeep  = (m_axis_tvalid && m_axis_tready)? tkeep_buffer[read_ptr]:tkeep_int;
-+assign m_axis_tlast  = (m_axis_tvalid && m_axis_tready)? tlast_buffer[read_ptr]:tlast_int;
-+
-+assign m_axis_tvalid = (count !=0);  //Not Empty
-+assign s_axis_tready = (count != DEPTH); // Not Full
-+
-+endmodule
-+
-diff --git a/src/hbm_subsystem/memory_controller/stream_buffer_mod.sv b/src/hbm_subsystem/memory_controller/stream_buffer_mod.sv
-new file mode 100644
-index 0000000..0d14799
---- /dev/null
-+++ b/src/hbm_subsystem/memory_controller/stream_buffer_mod.sv
-@@ -0,0 +1,116 @@
-+`timescale 1ns / 1ps
-+//////////////////////////////////////////////////////////////////////////////////
-+// Company: 
-+// Engineer: 
-+// 
-+// Create Date: 09/12/2025 01:38:29 AM
-+// Design Name: 
-+// Module Name: stream_buffer_mod
-+// Project Name: 
-+// Target Devices: 
-+// Tool Versions: 
-+// Description: 
-+// 
-+// Dependencies: 
-+// 
-+// Revision:
-+// Revision 0.01 - File Created
-+// Additional Comments:
-+// 
-+//////////////////////////////////////////////////////////////////////////////////
-+
-+
-+module stream_buffer_mod #(
-+    parameter DATA_WIDTH = 512,
-+    parameter KEEP_WIDTH = DATA_WIDTH/8,
-+    parameter DEPTH      = 64,
-+    parameter PTR_WIDTH  = $clog2(DEPTH)
-+)(
-+    input logic aclk,
-+    input logic aresetn,
-+
-+    input  logic [DATA_WIDTH-1:0] s_axis_tdata,
-+    input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
-+    input  logic                  s_axis_tvalid,
-+    input  logic                  s_axis_tlast,
-+    output logic                  s_axis_tready,
-+
-+
-+    output logic [DATA_WIDTH-1:0] m_axis_tdata,
-+    output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
-+    output logic                  m_axis_tvalid,
-+    output logic                  m_axis_tlast,
-+    input  logic                  m_axis_tready
-+    );
-+
-+// Memory Buffers
-+logic [DEPTH-1:0][DATA_WIDTH-1:0] tdata_buffer;
-+logic [DEPTH-1:0][KEEP_WIDTH-1:0] tkeep_buffer;
-+logic [DEPTH-1:0]                 tlast_buffer;
-+
-+// Write & Read pointers
-+logic [PTR_WIDTH-1:0] write_ptr;
-+logic [PTR_WIDTH-1:0] read_ptr;
-+
-+// Counter
-+logic [PTR_WIDTH:0] count;
-+
-+// Write logic
-+always_ff @(posedge aclk, negedge aresetn) begin
-+    if(!aresetn) begin
-+        write_ptr <= '0;
-+    end
-+    else if (s_axis_tvalid && s_axis_tready) begin
-+        tdata_buffer[write_ptr] <= s_axis_tdata;
-+        tkeep_buffer[write_ptr] <= s_axis_tkeep;
-+        tlast_buffer[write_ptr] <= s_axis_tlast;
-+        write_ptr <= (write_ptr == DEPTH - 1)? 0: write_ptr + 1;
-+    end
-+end
-+
-+// Read logic
-+always_ff @(posedge aclk, negedge aresetn) begin
-+    if(!aresetn) begin
-+        read_ptr <= '0;
-+    end
-+    else if (m_axis_tvalid && m_axis_tready) begin
-+        read_ptr <= (read_ptr == DEPTH - 1)? 0: read_ptr + 1;
-+    end
-+end
-+
-+// Count logic
-+always_ff @(posedge aclk, negedge aresetn) begin
-+    if(!aresetn) begin
-+        count <= '0;
-+    end
-+    else begin
-+        case({s_axis_tvalid && s_axis_tready, m_axis_tvalid  && m_axis_tready})
-+            2'b01: count <= count - 1; // Read only
-+            2'b10: count <= count + 1; // Write only
-+            2'b11: count <= count;    // Read + Write (NO change)
-+            default: count <= count;
-+        endcase
-+    end
-+end
-+
-+// Registered outputs
-+always_ff @(posedge aclk or negedge aresetn) begin
-+  if (!aresetn) begin
-+    m_axis_tdata  <= '0;
-+    m_axis_tkeep  <= '0;
-+    m_axis_tlast  <= 1'b0;
-+  end else if (m_axis_tvalid && m_axis_tready) begin
-+    m_axis_tdata  <= tdata_buffer[read_ptr];
-+    m_axis_tkeep  <= tkeep_buffer[read_ptr];
-+    m_axis_tlast  <= tlast_buffer[read_ptr];
-+  end
-+end
-+
-+
-+
-+assign m_axis_tvalid = (count !=0);  //Not Empty
-+assign s_axis_tready = (count != DEPTH); // Not Full
-+
-+endmodule
-+
-+
 diff --git a/src/hbm_subsystem/memory_controller/synchronizer.sv b/src/hbm_subsystem/memory_controller/synchronizer.sv
 new file mode 100644
 index 0000000..291d34f
@@ -2118,10 +1999,10 @@ index 0000000..291d34f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
 new file mode 100644
-index 0000000..4313e90
+index 0000000..4a618c4
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_deparser.p4
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,244 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -2138,8 +2019,10 @@ index 0000000..4313e90
 +const bit<16> REPLICATION_PORT = 0x7777;
 +
 +const bit<16> IP_HEADER_SIZE   = 20;
-+const bit<16> HEADERS_SIZE     = 8 + 2 + 64;  // UDP + replication + key
-+const bit<16> READ_RESULT_SIZE = HEADERS_SIZE + 1024 - 4 - 8;
++const bit<16> UDP_HEADER_SIZE  = 8; 
++const bit<16> REP_HEADER_SIZE  = 2;
++const bit<16> KEY_SIZE         = 8;
++const bit<16> PAYLOAD_SIZE     = 1024 - 4 - 8;
 +
 +// Operations in rep header
 +const bit<8> READ        = 0x00;
@@ -2280,12 +2163,21 @@ index 0000000..4313e90
 +  bit<16> csum;
 +
 +  apply {
-+    if (meta.opcode == READ_RESULT) {
-+      ip_length  = READ_RESULT_SIZE + IP_HEADER_SIZE;
-+      udp_length = READ_RESULT_SIZE;
++    if (meta.opcode == WRITE) {
++      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE + PAYLOAD_SIZE;
++      ip_length = IP_HEADER_SIZE + udp_length;
++      hdr.key.setInvalid();
++    } else if (meta.opcode == READ_RESULT) {
++      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE + PAYLOAD_SIZE;
++      ip_length = IP_HEADER_SIZE + udp_length;
++      hdr.key.setInvalid();
++    } else if (meta.opcode == WRITE_ACK) {
++      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE;
++      ip_length = IP_HEADER_SIZE + udp_length;
++      hdr.key.setValid();
 +    } else {
-+      ip_length  = HEADERS_SIZE + IP_HEADER_SIZE;
-+      udp_length = HEADERS_SIZE;
++      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE;
++      ip_length = IP_HEADER_SIZE + udp_length;
 +      hdr.key.setValid();
 +    }
 +
@@ -2293,12 +2185,6 @@ index 0000000..4313e90
 +    hdr.ipv4.setValid();
 +    hdr.udp.setValid();
 +    hdr.rep.setValid();
-+
-+    if (meta.opcode == READ_RESULT || meta.opcode == WRITE) {
-+      hdr.key.setInvalid();
-+    } else {
-+      hdr.key.setValid();
-+    }
 +
 +    hdr.eth.dmac            = meta.mac_src;
 +    hdr.eth.smac            = meta.mac_own;
@@ -2363,7 +2249,7 @@ index 0000000..4313e90
 +) main;
 diff --git a/src/hbm_subsystem/packet_parser.p4 b/src/hbm_subsystem/packet_parser.p4
 new file mode 100644
-index 0000000..ede3b90
+index 0000000..d99a087
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_parser.p4
 @@ -0,0 +1,274 @@
@@ -2582,7 +2468,7 @@ index 0000000..ede3b90
 +    is_rep  = (bit<1>) 0;
 +
 +    if (hdr.eth.isValid() && hdr.ipv4.isValid() && hdr.udp.isValid() && hdr.rep.isValid() && hdr.key.isValid()) {
-+      if (hdr.rep.opcode != READ_RESULT) {
++      if (hdr.udp.dst_port == 0x7777 && hdr.rep.opcode != READ_RESULT) {
 +        ip_src  = hdr.ipv4.src;
 +        mac_src = hdr.eth.smac;
 +        opcode  = hdr.rep.opcode;
@@ -2590,13 +2476,13 @@ index 0000000..ede3b90
 +        key     = hdr.key.key;
 +        is_rep  = (bit<1>) 1;
 +
-+        if (hdr.rep.opcode == READ || hdr.rep.opcode == WRITE_ACK) {
-+          smeta.drop = 1;
-+        } else {
++        if (hdr.rep.opcode == WRITE) {
 +          hdr.eth.setInvalid();
 +          hdr.ipv4.setInvalid();
 +          hdr.udp.setInvalid();
 +          hdr.rep.setInvalid();
++        } else {
++          smeta.drop = 1;
 +        }
 +      }
 +    }
@@ -2643,10 +2529,10 @@ index 0000000..ede3b90
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..fed2898
+index 0000000..52b5289
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,620 @@
 +`timescale 1ns/1ps
 +
 +typedef struct packed {
@@ -2661,8 +2547,8 @@ index 0000000..fed2898
 +  parameter DATA_WIDTH = 512,
 +  parameter KEEP_WIDTH = DATA_WIDTH / 8,
 +  parameter KEY_WIDTH  = 64,
-+  parameter NUM_NODES  = 4,
-+  parameter logic [31:0] NODES_IPS [NUM_NODES] = '{32'h0, 32'h1, 32'h2, 32'h3}
++  parameter NUM_NODES  = 2,
++  parameter logic [31:0] NODES_IPS [NUM_NODES] = '{ 32'hC0643301, 32'hC0643401}
 +) (
 +  input  logic axis_clk,
 +  input  logic axis_rstn,
@@ -3015,6 +2901,7 @@ index 0000000..fed2898
 +          if (rep_read_cnt == 0) begin
 +            metadata_out_valid = 1'b1;
 +            metadata_out       = net_meta_out;
++            //FIXME: Change mac address
 +            metadata_out.id    = ack_id - 1;
 +            metadata_out.ip    = NODES_IPS[nodes_count + 1];
 +          end
