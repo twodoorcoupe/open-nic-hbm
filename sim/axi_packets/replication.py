@@ -19,11 +19,11 @@ class Replication(Packet):
   ]
 
 
-def make_replication_packet(dst_mac, src_mac, dst_ip, src_ip, opcode, key, payload):
+def make_replication_packet(dst_mac, src_mac, dst_ip, src_ip, opcode, key, payload, id=0):
   eth = Ether(dst=dst_mac, src=src_mac)
   ip = IP(dst=dst_ip, src=src_ip)
   udp = UDP(sport=30583, dport=30583)
-  rep = Replication(opcode=opcode, id=0, key=key)
+  rep = Replication(opcode=opcode, id=id, key=key)
   pkt = eth / ip / udp / rep / Raw(payload)
   return pkt
 
