@@ -10,7 +10,7 @@ NUM_CMAC_PORT = 1
 NUM_QDMA = 1
 NUM_PHYS_FUNC = 1
 NUM_QUEUE = 512
-USER_BOX = "__full__"
+USER_BOX = "__250mhz__"
 SIM_LOCATION = os.environ["PWD"]
 
 
@@ -30,8 +30,8 @@ class InterfacesManager:
     def _get_interface_names(self):
         for i in range(NUM_CMAC_PORT):
             yield f"cmac{i}"
-        if self.box == "__250mhz__":
-            interfaces_range = NUM_QDMA * NUM_PHYS_FUNC
+        # if self.box == "__250mhz__":
+        #     interfaces_range = NUM_QDMA * NUM_PHYS_FUNC
         # for i in range(interfaces_range):
             # yield f"dma{i}"
         # yield "registers"

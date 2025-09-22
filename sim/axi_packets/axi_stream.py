@@ -58,7 +58,7 @@ def _set_plugin_tuser(file, name, packet):
     tuser_dst = 0
 
     interface_type = name[:3]
-    interface_index = int(name[3]) + 1
+    interface_index = int(name[4]) + 1
     masked_value = interface_index & 0xFFFF
     if interface_type == "dma":
         tuser_src |= masked_value

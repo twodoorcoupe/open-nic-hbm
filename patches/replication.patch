@@ -304,20 +304,19 @@ index 97fedbc..f4fba96 100644
  
    # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..8ef1094 100644
+index 4571b97..b8a40a2 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
-@@ -1,4 +1,8 @@
+@@ -1,4 +1,7 @@
 -module hbm_subsystem (
 +module hbm_subsystem #(
 +  parameter logic [31:0] IP_ADDRESS     = 32'hC0643300,
-+  parameter logic [47:0] MAC_ADDRESS    = 48'h020A35000700,
-+  parameter              METADATA_WIDTH = 161
++  parameter logic [47:0] MAC_ADDRESS    = 48'h020A35000700
 +) (
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
    input    [3:0] s_axi_arcache,
-@@ -40,11 +44,99 @@ module hbm_subsystem (
+@@ -40,11 +43,101 @@ module hbm_subsystem (
    input   [63:0] s_axi_wuser,
    input          s_axi_wvalid,
  
@@ -364,7 +363,9 @@ index 4571b97..8ef1094 100644
  );
 -  
 +
-+  localparam FIFO_DEPTH = 64;
++  // Consider that parser's metadata's lsb has extra bit to indicate replication
++  localparam METADATA_WIDTH = $bits(st_metadata);
++  localparam FIFO_DEPTH     = 64;
 +
 +  logic         axis_dm_write_tvalid;
 +  logic [511:0] axis_dm_write_tdata;
@@ -419,7 +420,7 @@ index 4571b97..8ef1094 100644
    hbm_bd_wrapper hbm_inst (
      .s_axi_hbm_araddr                (s_axi_araddr),
      .s_axi_hbm_arburst               (s_axi_arburst),
-@@ -87,8 +179,408 @@ module hbm_subsystem (
+@@ -87,8 +180,352 @@ module hbm_subsystem (
      .s_axi_hbm_wuser                 (s_axi_wuser),
      .s_axi_hbm_wvalid                (s_axi_wvalid),
  
@@ -466,14 +467,15 @@ index 4571b97..8ef1094 100644
 +    .bready                          (bready),
 +    .bresp                           (bresp),
 +    .bvalid                          (bvalid)
-   );
--  endmodule
-\ No newline at end of file
++  );
 +
 +  logic                      axis_parser_to_filter_tvalid;
 +  logic              [511:0] axis_parser_to_filter_tdata;
 +  logic               [63:0] axis_parser_to_filter_tkeep;
 +  logic                      axis_parser_to_filter_tlast;
++  logic               [15:0] axis_parser_to_filter_tuser_size;
++  logic               [15:0] axis_parser_to_filter_tuser_src;
++  logic               [15:0] axis_parser_to_filter_tuser_dst;
 +  logic                      axis_parser_to_filter_tready;
 +
 +  logic                      axis_filter_to_engine_tvalid;
@@ -506,25 +508,19 @@ index 4571b97..8ef1094 100644
 +  logic                      axis_memory_to_engine_tlast;
 +  logic                      axis_memory_to_engine_tready;
 +
-+  logic                      cmac_tuser_write_en;
-+  logic                      cmac_tuser_read_en;
-+  logic               [47:0] cmac_tuser_out;
-+  logic                      cmac_tuser_empty;
-+  logic                      cmac_tuser_write_en_toggle;
-+
-+  logic [METADATA_WIDTH-2:0] mem_metadata_in;
++  st_metadata                mem_metadata_in;
 +  logic                      mem_metadata_in_valid;
-+
-+  logic [METADATA_WIDTH-2:0] mem_metadata_out;
++               
++  st_metadata                mem_metadata_out;
 +  logic                      mem_metadata_out_valid;
-+
-+  logic [METADATA_WIDTH-2:0] engine_metadata_out;
++               
++  st_metadata                engine_metadata_out;
 +  logic                      engine_metadata_out_valid;
 +
-+  logic [METADATA_WIDTH-1:0] parser_metadata_in;
++  logic   [METADATA_WIDTH:0] parser_metadata_in;
 +  logic                      parser_metadata_in_valid;
 +
-+  logic [METADATA_WIDTH-1:0] parser_metadata_out;
++  logic   [METADATA_WIDTH:0] parser_metadata_out;
 +  logic                      parser_metadata_out_valid;
 +
 +  // Buffer the switch for the packet filter
@@ -552,7 +548,7 @@ index 4571b97..8ef1094 100644
 +    .s_axis_tkeep           (axis_filter_to_engine_tkeep),
 +    .s_axis_tlast           (axis_filter_to_engine_tlast),
 +    .s_axis_tready          (axis_filter_to_engine_tready),
-+    .metadata_in            (parser_metadata_out[METADATA_WIDTH-1:1]),
++    .metadata_in            (parser_metadata_out[METADATA_WIDTH:1]),
 +    .metadata_in_valid      (parser_metadata_out_valid && is_replication),
 +
 +    .m_axis_tvalid          (axis_engine_to_deparser_tvalid),
@@ -648,7 +644,8 @@ index 4571b97..8ef1094 100644
 +    .s_axis_tvalid           (s_axis_cmac_c2h_tvalid), 
 +    .s_axis_tdata            (s_axis_cmac_c2h_tdata), 
 +    .s_axis_tkeep            (s_axis_cmac_c2h_tkeep), 
-+    .s_axis_tlast            (s_axis_cmac_c2h_tlast), 
++    .s_axis_tlast            (s_axis_cmac_c2h_tlast),
++    .s_axis_tuser            ({s_axis_cmac_c2h_tuser_size, s_axis_cmac_c2h_tuser_src, s_axis_cmac_c2h_tuser_dst}),
 +    .s_axis_tready           (s_axis_cmac_c2h_tready), 
 +    .user_metadata_in        (parser_metadata_in),
 +    .user_metadata_in_valid  (parser_metadata_in_valid),
@@ -656,7 +653,8 @@ index 4571b97..8ef1094 100644
 +    .m_axis_tvalid           (axis_parser_to_filter_tvalid), 
 +    .m_axis_tdata            (axis_parser_to_filter_tdata), 
 +    .m_axis_tkeep            (axis_parser_to_filter_tkeep), 
-+    .m_axis_tlast            (axis_parser_to_filter_tlast), 
++    .m_axis_tlast            (axis_parser_to_filter_tlast),
++    .m_axis_tuser            ({axis_parser_to_filter_tuser_size, axis_parser_to_filter_tuser_src, axis_parser_to_filter_tuser_dst}),
 +    .m_axis_tready           (axis_parser_to_filter_tready), 
 +    .user_metadata_out       (parser_metadata_out),
 +    .user_metadata_out_valid (parser_metadata_out_valid),
@@ -702,7 +700,9 @@ index 4571b97..8ef1094 100644
 +
 +    .s_axis_aclk             (axi_clk),
 +    .s_axis_aresetn          (vitis_net_p4_resetn)
-+  );
+   );
+-  endmodule
+\ No newline at end of file
 +
 +  logic    [1:0] axis_filter_out_tvalid;
 +  logic [1023:0] axis_filter_out_tdata;
@@ -717,7 +717,7 @@ index 4571b97..8ef1094 100644
 +    .s_axis_tdata            (axis_parser_to_filter_tdata),
 +    .s_axis_tkeep            (axis_parser_to_filter_tkeep),
 +    .s_axis_tlast            (axis_parser_to_filter_tlast),
-+    .s_axis_tuser            (cmac_tuser_out),
++    .s_axis_tuser            ({axis_parser_to_filter_tuser_size, axis_parser_to_filter_tuser_src, axis_parser_to_filter_tuser_dst}),
 +    .s_axis_tdest            (is_replication),
 +    .s_axis_tready           (axis_parser_to_filter_tready),
 +
@@ -775,61 +775,6 @@ index 4571b97..8ef1094 100644
 +    .aclk                    (axi_clk),
 +    .aresetn                 (axi_rstn)
 +  );
-+
-+  // FIFO to buffer input tuser data from CMAC
-+  xpm_fifo_sync #(
-+    .DOUT_RESET_VALUE    ("0"),
-+    .ECC_MODE            ("no_ecc"),
-+    .FIFO_MEMORY_TYPE    ("auto"),
-+    .FIFO_READ_LATENCY   (1),
-+    .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
-+    .PROG_FULL_THRESH    (FIFO_DEPTH-5),
-+    .READ_DATA_WIDTH     (48),
-+    .READ_MODE           ("fwft"),
-+    .WRITE_DATA_WIDTH    (48)
-+  ) metadata_fifo (
-+    .wr_en               (cmac_tuser_write_en),
-+    .din                 ({s_axis_cmac_c2h_tuser_size, s_axis_cmac_c2h_tuser_src, s_axis_cmac_c2h_tuser_dst}),
-+    .wr_ack              (),
-+    .rd_en               (cmac_tuser_read_en),
-+    .data_valid          (),
-+    .dout                (cmac_tuser_out),
-+    .wr_data_count       (),
-+    .rd_data_count       (),
-+    .empty               (cmac_tuser_empty),
-+    .full                (),
-+    .almost_empty        (),
-+    .almost_full         (),
-+    .overflow            (),
-+    .underflow           (),
-+    .prog_empty          (),
-+    .prog_full           (),
-+    .sleep               (1'b0),
-+    .sbiterr             (),
-+    .dbiterr             (),
-+    .injectsbiterr       (1'b0),
-+    .injectdbiterr       (1'b0),
-+    .wr_clk              (axi_clk),
-+    .rst                 (~axi_rstn),
-+    .rd_rst_busy         (),
-+    .wr_rst_busy         ()
-+  );
-+
-+  // Control the tuser FIFO signals
-+  always_ff @(posedge axi_clk) begin
-+    if(~axi_rstn) begin
-+      cmac_tuser_write_en_toggle <= 1'b1;
-+    end
-+    else begin
-+      if (cmac_tuser_write_en_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready) 
-+        cmac_tuser_write_en_toggle <= 1'b0;  
-+      if (!cmac_tuser_write_en_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
-+        cmac_tuser_write_en_toggle <= 1'b1;
-+    end
-+  end
-+
-+  assign cmac_tuser_write_en = cmac_tuser_write_en_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
-+  assign cmac_tuser_read_en  = axis_parser_to_filter_tlast && axis_parser_to_filter_tvalid && axis_parser_to_filter_tready;
 +
 +endmodule
 \ No newline at end of file
@@ -2299,10 +2244,10 @@ index 0000000..8e99400
 +) main;
 diff --git a/src/hbm_subsystem/packet_parser.p4 b/src/hbm_subsystem/packet_parser.p4
 new file mode 100644
-index 0000000..037d941
+index 0000000..bfe00ae
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_parser.p4
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,283 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -2413,13 +2358,21 @@ index 0000000..037d941
 +  key_h      key;
 +}
 +
++struct tuser_format {
++   bit<16> size;
++   bit<16> src;
++   bit<16> dst;
++}
++
++
 +struct metadata_t {
-+  bit<32> ip_src;
-+  bit<48> mac_src;
-+  bit<8>  opcode;
-+  bit<8>  index;
-+  bit<64> key;
-+  bit<1>  is_rep;
++  tuser_format axis_tuser;
++  bit<32>      ip_src;
++  bit<48>      mac_src;
++  bit<8>       opcode;
++  bit<8>       index;
++  bit<64>      key;
++  bit<1>       is_rep;
 +}
 +
 +// User-defined errors
