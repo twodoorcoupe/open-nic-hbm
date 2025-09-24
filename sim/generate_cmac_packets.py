@@ -20,7 +20,7 @@ axi_packets.make_cycles_delay("cmac0", 1000)
 key = 1
 id = 1
 opcode = 1
-packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, payload=payload)
+packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, id=id, payload=payload)
 axi_packets.send_packets("cmac0", packet)
 axi_packets.make_cycles_delay("cmac0", 1000)
 
@@ -28,7 +28,7 @@ axi_packets.make_cycles_delay("cmac0", 1000)
 key = 1
 id = 1
 opcode = 0 
-packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, payload="")
+packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, id=id, payload="")
 axi_packets.send_packets("cmac0", packet)
 axi_packets.make_cycles_delay("cmac0", 1000)
 

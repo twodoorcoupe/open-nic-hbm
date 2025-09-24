@@ -7,6 +7,637 @@ index 0000000..b50577f
 +    read_verilog -quiet [glob -nocomplain -directory $module_dir/memory_controller "*.{v,vh}"]
 +    read_verilog -quiet -sv [glob -nocomplain -directory $module_dir/memory_controller "*.sv"]
 \ No newline at end of file
+diff --git a/src/hbm_subsystem/cuckoo_hash.sv b/src/hbm_subsystem/cuckoo_hash.sv
+new file mode 100644
+index 0000000..c72786b
+--- /dev/null
++++ b/src/hbm_subsystem/cuckoo_hash.sv
+@@ -0,0 +1,625 @@
++  import metadata_pkg::*;
++
++module cuckoo_hash # (
++  parameter  int BUCKET_SIZE = 1024,
++  parameter  int N_FUNCTIONS = 4,
++  parameter  int MAX_KICKS   = 4,
++  parameter  int KEY_WIDTH   = 64,
++  parameter  int DATA_WIDTH  = 512,
++  localparam int KEEP_WIDTH  = DATA_WIDTH / 8,
++  localparam int HASH_WIDTH  = 34 - $clog2(BUCKET_SIZE),
++  localparam int CMD_WIDTH   = 80,
++  localparam int METADATA_WIDTH = 160,
++  parameter logic [HASH_WIDTH-1:0] HASH_MATRIX [N_FUNCTIONS][KEY_WIDTH-1:0] = '{default: '0}
++) (
++  input  logic clk,
++  input  logic rstn,
++
++  input  logic                  s_axis_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
++  input  logic                  s_axis_tuser,
++  input  logic                  s_axis_tlast,
++  output logic                  s_axis_tready,
++
++  input  st_metadata            metadata_in,
++  input  logic                  metadata_in_valid,
++
++  output logic                  m_axis_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
++  output logic                  m_axis_tuser,
++  output logic                  m_axis_tlast,
++  input  logic                  m_axis_tready,
++
++  output st_metadata            metadata_out,
++  output logic                  metadata_out_valid,
++
++  input  logic                  s_axis_dm_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_dm_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_dm_tkeep,
++  input  logic                  s_axis_dm_tlast,
++  output logic                  s_axis_dm_tready,
++
++  output logic                  m_axis_dm_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_dm_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_dm_tkeep,
++  output logic                  m_axis_dm_tlast,
++  input  logic                  m_axis_dm_tready,
++
++  output logic                  m_axis_dm_mm2s_cmd_tvalid,
++  output logic  [CMD_WIDTH-1:0] m_axis_dm_mm2s_cmd_tdata,
++  input  logic                  m_axis_dm_mm2s_cmd_tready,
++
++  output logic                  m_axis_dm_s2mm_cmd_tvalid,
++  output logic  [CMD_WIDTH-1:0] m_axis_dm_s2mm_cmd_tdata,
++  input  logic                  m_axis_dm_s2mm_cmd_tready,
++
++  output logic           [33:0] m_axi_araddr   [N_FUNCTIONS],
++  output logic            [1:0] m_axi_arburst  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_arcache  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_arid     [N_FUNCTIONS],
++  output logic            [3:0] m_axi_arlen    [N_FUNCTIONS],
++  output logic            [1:0] m_axi_arlock   [N_FUNCTIONS],
++  output logic            [2:0] m_axi_arprot   [N_FUNCTIONS],
++  input  logic                  m_axi_arready  [N_FUNCTIONS],
++  output logic            [2:0] m_axi_arsize   [N_FUNCTIONS],
++  output logic                  m_axi_arvalid  [N_FUNCTIONS],
++  output logic           [33:0] m_axi_awaddr   [N_FUNCTIONS],
++  output logic            [1:0] m_axi_awburst  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_awcache  [N_FUNCTIONS],
++  output logic            [3:0] m_axi_awid     [N_FUNCTIONS],
++  output logic            [3:0] m_axi_awlen    [N_FUNCTIONS],
++  output logic            [1:0] m_axi_awlock   [N_FUNCTIONS],
++  output logic            [2:0] m_axi_awprot   [N_FUNCTIONS],
++  input  logic                  m_axi_awready  [N_FUNCTIONS],
++  output logic            [2:0] m_axi_awsize   [N_FUNCTIONS],
++  output logic                  m_axi_awvalid  [N_FUNCTIONS],
++  input  logic            [3:0] m_axi_bid      [N_FUNCTIONS],
++  output logic                  m_axi_bready   [N_FUNCTIONS],
++  input  logic            [1:0] m_axi_bresp    [N_FUNCTIONS],
++  input  logic                  m_axi_bvalid   [N_FUNCTIONS],
++  input  logic          [255:0] m_axi_rdata    [N_FUNCTIONS],
++  input  logic            [3:0] m_axi_rid      [N_FUNCTIONS],
++  input  logic                  m_axi_rlast    [N_FUNCTIONS],
++  output logic                  m_axi_rready   [N_FUNCTIONS],
++  input  logic            [1:0] m_axi_rresp    [N_FUNCTIONS],
++  input  logic                  m_axi_rvalid   [N_FUNCTIONS],
++  output logic          [255:0] m_axi_wdata    [N_FUNCTIONS],
++  output logic                  m_axi_wlast    [N_FUNCTIONS],
++  input  logic                  m_axi_wready   [N_FUNCTIONS],
++  output logic           [31:0] m_axi_wstrb    [N_FUNCTIONS],
++  output logic                  m_axi_wvalid   [N_FUNCTIONS]
++);
++  localparam int FIFO_DEPTH       = 2 * BUCKET_SIZE * 8 / DATA_WIDTH;
++  localparam int ADDRESS_SHIFT    = $clog2(BUCKET_SIZE);
++  localparam int HASH_COUNT_WIDTH = $clog2(N_FUNCTIONS);
++  localparam int KICK_COUNT_WIDTH = $clog2(MAX_KICKS);
++  localparam logic [22:0] DM_BTT  = BUCKET_SIZE - 23'h4;
++
++  logic                  axis_buffer_in_tvalid;
++  logic [DATA_WIDTH-1:0] axis_buffer_in_tdata;
++  logic [KEEP_WIDTH-1:0] axis_buffer_in_tkeep;
++  logic                  axis_buffer_in_tlast;
++  logic                  axis_buffer_in_tready;
++
++  logic                  axis_buffer_out_tvalid;
++  logic [DATA_WIDTH-1:0] axis_buffer_out_tdata;
++  logic [KEEP_WIDTH-1:0] axis_buffer_out_tkeep;
++  logic                  axis_buffer_out_tlast;
++  logic                  axis_buffer_out_tready;
++
++  xpm_fifo_axis #(
++    .FIFO_DEPTH               (FIFO_DEPTH),
++    .TDATA_WIDTH              (DATA_WIDTH)
++  ) xpm_fifo_axis_inst (
++    .m_axis_tvalid            (axis_buffer_out_tvalid),
++    .m_axis_tready            (axis_buffer_out_tready),
++    .m_axis_tdata             (axis_buffer_out_tdata),
++    .m_axis_tkeep             (axis_buffer_out_tkeep),
++    .m_axis_tdest             (),
++    .m_axis_tid               (),
++    .m_axis_tstrb             (),
++    .m_axis_tuser             (),
++    .m_axis_tlast             (axis_buffer_out_tlast),
++
++    .s_axis_tvalid            (axis_buffer_in_tvalid),
++    .s_axis_tready            (axis_buffer_in_tready),
++    .s_axis_tdata             (axis_buffer_in_tdata),
++    .s_axis_tkeep             (axis_buffer_in_tkeep),
++    .s_axis_tdest             (1'b0),
++    .s_axis_tid               (1'b0),
++    .s_axis_tstrb             ('0),
++    .s_axis_tuser             (1'b0),
++    .s_axis_tlast             (axis_buffer_in_tlast),
++
++    .injectsbiterr_axis       (1'b0),
++    .injectdbiterr_axis       (1'b0),
++    .m_aclk                   (clk),
++    .s_aclk                   (clk),
++    .s_aresetn                (rstn)
++  );
++
++  typedef enum logic [2:0] {IDLE, CHECK_READ, CHECK_WRITE, READ, WRITE, SWAP, RECHECK, ERROR} state_e;
++  typedef enum logic [2:0] {BUF_IN_IDLE, BUF_IN_FILL, BUF_IN_FILL_FROM_DM, BUF_IN_DONE} buf_in_state_e;
++  typedef enum logic [2:0] {BUF_OUT_IDLE, BUF_OUT_EMPTY, BUF_OUT_EMPTY_READ_CMD, BUF_OUT_EMPTY_TO_DM, BUF_OUT_DONE} buf_out_state_e;
++  typedef enum logic [2:0] {DM_IDLE, DM_CMD_READ, DM_READ, DM_CMD_WRITE, DM_WRITE, DM_DONE} dm_state_e;
++  typedef enum logic [2:0] {HBM_READ_IDLE, HBM_READ_ADDRESS, HBM_READ, HBM_READ_DONE} hbm_read_state_e;
++  typedef enum logic [2:0] {HBM_WRITE_IDLE, HBM_WRITE_ADDRESS, HBM_WRITE, HBM_WRITE_DONE} hbm_write_state_e;
++
++  state_e                       state,                            state_next;
++  buf_in_state_e                buf_in_state,                     buf_in_state_next;
++  buf_out_state_e               buf_out_state,                    buf_out_state_next;
++  dm_state_e                    dm_state,                         dm_state_next;
++  hbm_read_state_e              hbm_read_state [N_FUNCTIONS],     hbm_read_state_next [N_FUNCTIONS];
++  hbm_write_state_e             hbm_write_state [N_FUNCTIONS],    hbm_write_state_next [N_FUNCTIONS];
++  logic                         stored_dirty [N_FUNCTIONS],       stored_dirty_next [N_FUNCTIONS];
++  logic         [KEY_WIDTH-1:0] stored_keys [N_FUNCTIONS],        stored_keys_next [N_FUNCTIONS];
++  logic        [HASH_WIDTH-1:0] current_addresses [N_FUNCTIONS],  current_addresses_next [N_FUNCTIONS];
++  logic         [KEY_WIDTH-1:0] current_key,                      current_key_next;
++  logic        [HASH_WIDTH-1:0] address,                          address_next;
++  logic  [KICK_COUNT_WIDTH-1:0] kick_count,                       kick_count_next;
++
++  logic start_hbm_read;
++  logic start_hbm_write;
++  logic start_dm_read;
++  logic start_dm_write;
++  logic start_dm_swap;
++  logic start_buf_in;
++  logic start_buf_in_from_dm;
++  logic start_buf_out;
++  logic start_buf_out_read_cmd;
++  logic start_buf_out_to_dm;
++  logic stop_hbm_read;
++  logic stop_hbm_write;
++  logic stop_dm;
++  logic stop_buf_in;
++  logic stop_buf_out;
++
++  st_metadata metadata_buf, metadata_buf_next;
++
++  function automatic logic [HASH_WIDTH-1:0] hash (
++    input logic  [KEY_WIDTH-1:0] key,
++    input logic [HASH_WIDTH-1:0] matrix [KEY_WIDTH-1:0]
++  );
++    logic [HASH_WIDTH-1:0] accumulator = '0;
++    for (int i = 0; i < KEY_WIDTH; i = i + 1)
++        if (key[i])
++            accumulator ^= matrix[i];
++    return accumulator;
++  endfunction
++
++  function automatic logic hbm_read_done (
++    input hbm_read_state_e state [N_FUNCTIONS]
++  );
++    for (int i = 0; i < N_FUNCTIONS; i++)
++      if (state[i] != HBM_READ_DONE)
++        return 1'b0;
++    return 1'b1;
++  endfunction
++
++  function automatic logic hbm_write_done (
++    input hbm_write_state_e state [N_FUNCTIONS]
++  );
++    for (int i = 0; i < N_FUNCTIONS; i++)
++      if (state[i] != HBM_WRITE_DONE)
++        return 1'b0;
++    return 1'b1;
++  endfunction
++
++  function automatic logic no_collisions (
++    input  logic                  read,
++    input  logic                  stored_dirty [N_FUNCTIONS],
++    input  logic  [KEY_WIDTH-1:0] stored_keys [N_FUNCTIONS],
++    input  logic [HASH_WIDTH-1:0] current_addresses [N_FUNCTIONS],
++    input  logic  [KEY_WIDTH-1:0] current_key,
++    output logic [HASH_WIDTH-1:0] address
++  );
++    logic read_possible;
++    logic write_possible;
++    for (int i = 0; i < N_FUNCTIONS; i++) begin
++      read_possible = stored_dirty[i] && stored_keys[i] == current_key;
++      write_possible = !stored_dirty[i] || stored_keys[i] == current_key;
++      if (read && read_possible || !read && write_possible) begin
++        address = current_addresses[i];
++        return 1'b1;
++      end
++    end
++    address = '0;
++    return 1'b0;
++  endfunction
++
++  always_ff @(posedge clk) begin
++    if (!rstn) begin
++      state         <= IDLE;
++      buf_in_state  <= BUF_IN_IDLE;
++      buf_out_state <= BUF_OUT_IDLE;
++      dm_state      <= DM_IDLE;
++      current_key   <= '0;
++      address       <= '0;
++      kick_count    <= '0;
++      metadata_buf  <= '0;
++      for (int i = 0; i < N_FUNCTIONS; i++) begin
++        hbm_read_state[i]     <= HBM_READ_IDLE;
++        hbm_write_state[i]    <= HBM_WRITE_IDLE;
++        stored_dirty[i]       <= '0;
++        stored_keys[i]        <= '0;
++        current_addresses[i]  <= '0;
++      end
++    end
++    else begin
++      state         <= state_next;
++      buf_in_state  <= buf_in_state_next;
++      buf_out_state <= buf_out_state_next;
++      dm_state      <= dm_state_next;
++      current_key   <= current_key_next;
++      address       <= address_next;
++      kick_count    <= kick_count_next;
++      metadata_buf  <= metadata_buf_next;
++      for (int i = 0; i < N_FUNCTIONS; i++) begin
++        hbm_read_state[i]     <= hbm_read_state_next[i];
++        hbm_write_state[i]    <= hbm_write_state_next[i];
++        stored_dirty[i]       <= stored_dirty_next[i];
++        stored_keys[i]        <= stored_keys_next[i];
++        current_addresses[i]  <= current_addresses_next[i];
++      end
++    end
++  end
++
++  // Main state machine
++  always_comb begin
++    start_hbm_read          = 1'b0;
++    start_hbm_write         = 1'b0;
++    start_dm_read           = 1'b0;
++    start_dm_write          = 1'b0;
++    start_dm_swap           = 1'b0;
++    start_buf_in            = 1'b0;
++    start_buf_out           = 1'b0;
++    start_buf_out_read_cmd  = 1'b0;
++    stop_hbm_read           = 1'b0;
++    stop_hbm_write          = 1'b0;
++    stop_dm                 = 1'b0;
++    stop_buf_in             = 1'b0;
++    stop_buf_out            = 1'b0;
++    state_next              = state;
++    current_key_next        = current_key;
++    current_addresses_next  = current_addresses;
++    address_next            = address;
++    kick_count_next         = kick_count;
++    metadata_buf_next       = metadata_buf;
++    metadata_out_valid      = 1'b0;
++    metadata_out            = '0;
++    for (int i = 0; i < N_FUNCTIONS; i++)
++      current_addresses_next[i] = current_addresses_next[i];
++    case (state)
++      IDLE: begin
++        start_buf_in   = 1'b1;
++        stop_buf_out   = 1'b1;
++        stop_hbm_read  = 1'b1;
++        stop_hbm_write = 1'b1;
++        stop_dm        = 1'b1;
++        if (metadata_in_valid) begin
++          metadata_buf_next = metadata_in;
++          if (metadata_in.opcode == metadata_pkg::READ)
++            state_next = CHECK_READ;
++          else
++            state_next = CHECK_WRITE;
++          current_key_next = metadata_in.key;
++          for (int i = 0; i < N_FUNCTIONS; i++)
++            current_addresses_next[i] = hash(current_key_next, HASH_MATRIX[i]);
++        end
++      end
++      CHECK_READ: begin
++        stop_buf_in            = 1'b1;
++        start_buf_out_read_cmd = 1'b1;
++        start_hbm_read         = 1'b1;
++        if (hbm_read_done(hbm_read_state)) begin
++          stop_buf_out = 1'b1;
++          if (no_collisions(1'b1, stored_dirty, stored_keys, current_addresses, current_key, address_next))
++            state_next = READ;
++          else
++            state_next = ERROR;
++        end
++      end
++      CHECK_WRITE: begin
++        start_hbm_read = 1'b1;
++        if (hbm_read_done(hbm_read_state) && buf_in_state == BUF_IN_DONE)
++          if (no_collisions(1'b0, stored_dirty, stored_keys, current_addresses, current_key, address_next))
++            state_next = WRITE;
++          else
++            state_next = SWAP;
++      end
++      READ: begin
++        stop_hbm_read         = 1'b1;
++        stop_buf_in           = 1'b1;
++        start_buf_out         = 1'b1;
++        start_dm_read         = 1'b1;
++        if (dm_state == DM_DONE) begin
++          state_next = IDLE;
++          // Assume meta fifo is not full
++          metadata_out_valid = 1'b1;
++          metadata_out       = metadata_buf;
++        end
++      end
++      WRITE: begin
++        stop_hbm_read         = 1'b1;
++        stop_buf_in           = 1'b1;
++        start_dm_write        = 1'b1;
++        start_hbm_write       = 1'b1;
++        if (dm_state == DM_DONE && hbm_write_done(hbm_write_state)) begin
++          state_next = IDLE;
++          // Assume meta fifo is not full
++          metadata_out_valid = 1'b1;
++          metadata_out       = metadata_buf;
++        end
++      end
++      SWAP: begin
++        stop_hbm_read         = 1'b1;
++        stop_buf_in           = 1'b1;
++        start_dm_swap         = 1'b1;
++        if (dm_state == DM_DONE) begin
++          state_next       = RECHECK;
++          kick_count_next  = kick_count + 1;
++          current_key_next = stored_keys[kick_count[HASH_COUNT_WIDTH-1:0]];
++          for (int i = 0; i < N_FUNCTIONS; i++)
++            current_addresses_next[i] = hash(current_key_next, HASH_MATRIX[i]);
++        end
++      end
++      RECHECK: begin
++        stop_dm        = 1'b1;
++        stop_buf_in    = 1'b1;
++        stop_buf_out   = 1'b1;
++        start_hbm_read = 1'b1;
++        if (hbm_read_done(hbm_read_state))
++          if (no_collisions(1'b0, stored_dirty, stored_keys, current_addresses, current_key, address_next))
++            state_next = WRITE;
++          else
++            if (kick_count == MAX_KICKS - 1)
++              state_next = ERROR;
++            else
++              state_next = SWAP;
++      end
++      ERROR: begin
++        state_next = IDLE;
++        // Assume meta fifo is not full
++        metadata_out_valid = 1'b1;
++        metadata_out       = metadata_buf;
++        // TODO: In case of reads two beats must be sent as a result to not stall the output interface
++      end
++    endcase
++  end
++
++  // Buffer state machine
++  always_comb begin
++    buf_in_state_next      = buf_in_state;
++    buf_out_state_next     = buf_out_state;
++    axis_buffer_in_tvalid  = 1'b0;
++    axis_buffer_in_tdata   =   '0;
++    axis_buffer_in_tkeep   =   '0;
++    axis_buffer_in_tlast   = 1'b0;
++    axis_buffer_out_tready = 1'b0;
++    m_axis_tvalid          = 1'b0;
++    m_axis_tdata           =   '0;
++    m_axis_tkeep           =   '0;
++    m_axis_tuser           = 1'b0;
++    m_axis_tlast           = 1'b0;
++    s_axis_tready          = 1'b0;
++    m_axis_dm_tvalid       = 1'b0;
++    m_axis_dm_tdata        =   '0;
++    m_axis_dm_tkeep        =   '0;
++    m_axis_dm_tlast        = 1'b0;
++    s_axis_dm_tready       = 1'b0;
++    case (buf_in_state)
++      BUF_IN_IDLE: begin
++        if (start_buf_in)
++          buf_in_state_next = BUF_IN_FILL;
++        if (start_buf_in_from_dm)
++          buf_in_state_next = BUF_IN_FILL_FROM_DM;
++      end
++      BUF_IN_FILL: begin
++        axis_buffer_in_tvalid = s_axis_tvalid;
++        axis_buffer_in_tdata  = s_axis_tdata;
++        axis_buffer_in_tkeep  = s_axis_tkeep;
++        axis_buffer_in_tlast  = s_axis_tlast;
++        s_axis_tready         = axis_buffer_in_tready;
++        if (s_axis_tlast && s_axis_tvalid && s_axis_tready)
++          buf_in_state_next = BUF_IN_DONE;
++      end
++      BUF_IN_FILL_FROM_DM: begin
++        axis_buffer_in_tvalid = s_axis_dm_tvalid;
++        axis_buffer_in_tdata  = s_axis_dm_tdata;
++        axis_buffer_in_tkeep  = s_axis_dm_tkeep;
++        axis_buffer_in_tlast  = s_axis_dm_tlast;
++        s_axis_dm_tready      = axis_buffer_in_tready;
++        if (s_axis_dm_tlast && s_axis_dm_tvalid && s_axis_dm_tready)
++          buf_in_state_next = BUF_IN_DONE;
++      end
++      BUF_IN_DONE: begin
++        if (stop_buf_in)
++          buf_in_state_next = BUF_IN_IDLE;
++      end
++    endcase
++    case (buf_out_state)
++      BUF_OUT_IDLE: begin
++        if (start_buf_out)
++          buf_out_state_next = BUF_OUT_EMPTY;
++        if (start_buf_out_read_cmd)
++          buf_out_state_next = BUF_OUT_EMPTY_READ_CMD;
++        if (start_buf_out_to_dm)
++          buf_out_state_next = BUF_OUT_EMPTY_TO_DM;
++      end
++      BUF_OUT_EMPTY: begin
++        m_axis_tvalid           = axis_buffer_out_tvalid;
++        m_axis_tdata            = axis_buffer_out_tdata;
++        m_axis_tkeep            = axis_buffer_out_tkeep;
++        m_axis_tlast            = axis_buffer_out_tlast;
++        axis_buffer_out_tready  = m_axis_tready;
++        if (axis_buffer_out_tlast && axis_buffer_out_tvalid && axis_buffer_out_tready)
++          buf_out_state_next = BUF_OUT_DONE;
++      end
++      // Used to remove the read request packet from the buffer
++      BUF_OUT_EMPTY_READ_CMD: begin
++        axis_buffer_out_tready  = 1'b1;
++        if (axis_buffer_out_tlast && axis_buffer_out_tvalid && axis_buffer_out_tready)
++          buf_out_state_next = BUF_OUT_DONE;
++      end
++      BUF_OUT_EMPTY_TO_DM: begin
++        m_axis_dm_tvalid        = axis_buffer_out_tvalid;
++        m_axis_dm_tdata         = axis_buffer_out_tdata;
++        m_axis_dm_tkeep         = axis_buffer_out_tkeep;
++        m_axis_dm_tlast         = axis_buffer_out_tlast;
++        axis_buffer_out_tready  = m_axis_dm_tready;
++        if (axis_buffer_out_tlast && axis_buffer_out_tvalid && axis_buffer_out_tready)
++          buf_out_state_next = BUF_OUT_DONE;
++      end
++      BUF_OUT_DONE: begin
++        if (stop_buf_out)
++          buf_out_state_next = BUF_OUT_IDLE;
++      end
++    endcase
++  end
++
++  // Datamover state machine
++  always_comb begin
++    dm_state_next             = dm_state;
++    start_buf_in_from_dm      = 1'b0;
++    start_buf_out_to_dm       = 1'b0;
++    m_axis_dm_s2mm_cmd_tvalid = 1'b0;
++    m_axis_dm_s2mm_cmd_tdata  =   '0;
++    m_axis_dm_mm2s_cmd_tvalid = 1'b0;
++    m_axis_dm_mm2s_cmd_tdata  =   '0;
++    case (dm_state)
++      DM_IDLE: begin
++        if (start_dm_read || start_dm_swap)
++          dm_state_next = DM_CMD_READ;
++        else if (start_dm_write)
++          dm_state_next = DM_CMD_WRITE;
++      end
++      DM_CMD_READ: begin
++        start_buf_in_from_dm = 1'b1;
++        m_axis_dm_mm2s_cmd_tdata  = {8'b0, 6'b0, address, 10'b0, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
++        m_axis_dm_mm2s_cmd_tvalid = 1'b1;
++        if (m_axis_dm_mm2s_cmd_tready)
++          if (start_dm_swap)
++            dm_state_next = DM_CMD_WRITE;
++          else
++            dm_state_next = DM_READ;
++      end
++      DM_READ: begin
++        if (buf_out_state == BUF_OUT_DONE)
++          dm_state_next = DM_DONE;
++      end
++      DM_CMD_WRITE: begin
++        start_buf_out_to_dm = 1'b1;
++        // Jump dirty byte word
++        m_axis_dm_s2mm_cmd_tdata  = {8'b0, 6'b0, address, 10'h0, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
++        m_axis_dm_s2mm_cmd_tvalid = 1'b1;
++        if (m_axis_dm_s2mm_cmd_tready)
++          dm_state_next = DM_WRITE;
++      end
++      DM_WRITE: begin
++        if (buf_out_state == BUF_OUT_DONE)
++          if (start_dm_swap)
++            dm_state_next = DM_READ;
++          else
++            dm_state_next = DM_DONE;
++      end
++      DM_DONE: begin
++        if (stop_dm)
++          dm_state_next = DM_IDLE;
++      end
++    endcase
++  end
++
++  // HBM state machine
++  genvar i;
++  generate
++    for (i = 0; i < N_FUNCTIONS; i++) begin
++      always_comb begin
++        hbm_read_state_next[i]  = hbm_read_state[i];
++        hbm_write_state_next[i] = hbm_write_state[i];
++        stored_dirty_next[i]    = stored_dirty[i];
++        stored_keys_next[i]     = stored_keys[i];
++        m_axi_araddr[i]         =  64'b0;
++        m_axi_arburst[i]        =   2'b1;    // Incrementing burst
++        m_axi_arcache[i]        =   4'b0;    // Non-bufferable non-cacheable
++        m_axi_arprot[i]         =   3'b0;    // Unpriviliged secure data
++        m_axi_arid[i]           =   4'b0;
++        m_axi_arlen[i]          =   4'b0;    // 1 beat transfer
++        m_axi_arlock[i]         =   2'b0;    // Normal accesses
++        m_axi_arsize[i]         =   3'b100;  // 16 bytes transfer
++        m_axi_arvalid[i]        =   1'b0;
++        m_axi_awaddr[i]         =  64'b0;
++        m_axi_awburst[i]        =   2'b1;    // Incrementing burst
++        m_axi_awcache[i]        =   4'b0;    // Non-bufferable non-cacheable
++        m_axi_awprot[i]         =   3'b0;    // Unpriviliged secure data
++        m_axi_awid[i]           =   4'b0;
++        m_axi_awlen[i]          =   4'b0;    // 1 beat transfer
++        m_axi_awlock[i]         =   2'b0;    // Normal accesses
++        m_axi_awsize[i]         =   3'b010;  // 4 bytes transfer
++        m_axi_awvalid[i]        =   1'b0;
++        m_axi_bready[i]         =   1'b1;
++        m_axi_rready[i]         =   1'b0;
++        m_axi_wdata[i]          = 256'b0;
++        m_axi_wlast[i]          =   1'b1;
++        m_axi_wstrb[i]          =  32'b1;
++        m_axi_wvalid[i]         =   1'b0;
++        case (hbm_read_state[i])
++          HBM_READ_IDLE: begin
++            if (start_hbm_read)
++              hbm_read_state_next[i] = HBM_READ_ADDRESS;
++          end
++          HBM_READ_ADDRESS: begin
++            m_axi_araddr[i]   = current_addresses[i] << ADDRESS_SHIFT;
++            m_axi_arvalid[i]  = 1'b1;
++            if (m_axi_arready[i])
++              hbm_read_state_next[i] = HBM_READ;
++          end
++          HBM_READ: begin
++            m_axi_rready[i]   = 1'b1;
++            if (m_axi_rvalid[i]) begin
++              hbm_read_state_next[i]  = HBM_READ_DONE;
++              stored_dirty_next[i]    = m_axi_rdata[i][0];
++              stored_keys_next[i]     = {<< 8 {m_axi_rdata[i][32+:KEY_WIDTH]}};
++            end
++          end
++          HBM_READ_DONE: begin
++            if (stop_hbm_read)
++              hbm_read_state_next[i] = HBM_READ_IDLE;
++          end
++        endcase
++        case (hbm_write_state[i])
++          // We only intend to write the dirty byte to the correct address
++          HBM_WRITE_IDLE: begin
++            if (start_hbm_write)
++              if (address == current_addresses[i])
++                hbm_write_state_next[i] = HBM_WRITE_ADDRESS;
++              else
++                hbm_write_state_next[i] = HBM_WRITE_DONE;
++          end
++          HBM_WRITE_ADDRESS: begin
++            m_axi_awaddr[i]   = current_addresses[i] << ADDRESS_SHIFT;
++            m_axi_awvalid[i]  = 1'b1;
++            m_axi_wdata[i][0] = 1'b1;
++            m_axi_wvalid[i]   = 1'b1;
++            if (m_axi_awready[i]) begin
++              hbm_write_state_next[i] = HBM_WRITE;
++              if (m_axi_wready[i])
++                hbm_write_state_next[i] = HBM_WRITE_DONE;
++            end
++          end
++          HBM_WRITE: begin
++            m_axi_wdata[i][0] = 1'b1;
++            m_axi_wvalid[i]   = 1'b1;
++            if (m_axi_wready[i])
++              hbm_write_state_next[i] = HBM_WRITE_DONE;
++          end
++          HBM_WRITE_DONE: begin
++            if (stop_hbm_write)
++              hbm_write_state_next[i] = HBM_WRITE_IDLE;
++          end
++        endcase
++      end
++    end
++  endgenerate
++endmodule
 diff --git a/src/hbm_subsystem/hbm_bd.tcl b/src/hbm_subsystem/hbm_bd.tcl
 index 97fedbc..f4fba96 100644
 --- a/src/hbm_subsystem/hbm_bd.tcl
@@ -304,19 +935,20 @@ index 97fedbc..f4fba96 100644
  
    # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..b8a40a2 100644
+index 4571b97..9d75a8f 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
-@@ -1,4 +1,7 @@
+@@ -1,4 +1,8 @@
 -module hbm_subsystem (
 +module hbm_subsystem #(
 +  parameter logic [31:0] IP_ADDRESS     = 32'hC0643300,
-+  parameter logic [47:0] MAC_ADDRESS    = 48'h020A35000700
++  parameter logic [47:0] MAC_ADDRESS    = 48'h020A35000700,
++  parameter int          N_FUNCTIONS    = 4
 +) (
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
    input    [3:0] s_axi_arcache,
-@@ -40,11 +43,101 @@ module hbm_subsystem (
+@@ -40,11 +44,133 @@ module hbm_subsystem (
    input   [63:0] s_axi_wuser,
    input          s_axi_wvalid,
  
@@ -364,7 +996,7 @@ index 4571b97..b8a40a2 100644
 -  
 +
 +  // Consider that parser's metadata's lsb has extra bit to indicate replication
-+  localparam METADATA_WIDTH = $bits(st_metadata);
++  localparam METADATA_WIDTH = 160;
 +  localparam FIFO_DEPTH     = 64;
 +
 +  logic         axis_dm_write_tvalid;
@@ -413,17 +1045,170 @@ index 4571b97..b8a40a2 100644
 +    end
 +  end
 +
-+  logic        bready;         
-+  logic [1:0]  bresp;
-+  logic        bvalid;
++  logic  [33:0]  axi_araddr   [N_FUNCTIONS];
++  logic   [1:0]  axi_arburst  [N_FUNCTIONS];
++  logic   [3:0]  axi_arcache  [N_FUNCTIONS];
++  logic   [3:0]  axi_arid     [N_FUNCTIONS];
++  logic   [3:0]  axi_arlen    [N_FUNCTIONS];
++  logic   [1:0]  axi_arlock   [N_FUNCTIONS];
++  logic   [2:0]  axi_arprot   [N_FUNCTIONS];
++  logic          axi_arready  [N_FUNCTIONS];
++  logic   [2:0]  axi_arsize   [N_FUNCTIONS];
++  logic          axi_arvalid  [N_FUNCTIONS];
++  logic  [33:0]  axi_awaddr   [N_FUNCTIONS];
++  logic   [1:0]  axi_awburst  [N_FUNCTIONS];
++  logic   [3:0]  axi_awcache  [N_FUNCTIONS];
++  logic   [3:0]  axi_awid     [N_FUNCTIONS];
++  logic   [3:0]  axi_awlen    [N_FUNCTIONS];
++  logic   [1:0]  axi_awlock   [N_FUNCTIONS];
++  logic   [2:0]  axi_awprot   [N_FUNCTIONS];
++  logic          axi_awready  [N_FUNCTIONS];
++  logic   [2:0]  axi_awsize   [N_FUNCTIONS];
++  logic          axi_awvalid  [N_FUNCTIONS];
++  logic   [3:0]  axi_bid      [N_FUNCTIONS];
++  logic          axi_bready   [N_FUNCTIONS];
++  logic   [1:0]  axi_bresp    [N_FUNCTIONS];
++  logic          axi_bvalid   [N_FUNCTIONS];
++  logic [255:0]  axi_rdata    [N_FUNCTIONS];
++  logic   [3:0]  axi_rid      [N_FUNCTIONS];
++  logic          axi_rlast    [N_FUNCTIONS];
++  logic          axi_rready   [N_FUNCTIONS];
++  logic   [1:0]  axi_rresp    [N_FUNCTIONS];
++  logic          axi_rvalid   [N_FUNCTIONS];
++  logic [255:0]  axi_wdata    [N_FUNCTIONS];
++  logic          axi_wlast    [N_FUNCTIONS];
++  logic          axi_wready   [N_FUNCTIONS];
++  logic  [31:0]  axi_wstrb    [N_FUNCTIONS];
++  logic          axi_wvalid   [N_FUNCTIONS];
 +
    hbm_bd_wrapper hbm_inst (
      .s_axi_hbm_araddr                (s_axi_araddr),
      .s_axi_hbm_arburst               (s_axi_arburst),
-@@ -87,8 +180,352 @@ module hbm_subsystem (
+@@ -86,9 +212,564 @@ module hbm_subsystem (
+     .s_axi_hbm_wstrb                 (s_axi_wstrb),
      .s_axi_hbm_wuser                 (s_axi_wuser),
      .s_axi_hbm_wvalid                (s_axi_wvalid),
- 
++ 
++    .s_axi_0_araddr                  (axi_araddr[0]),
++    .s_axi_0_arburst                 (axi_arburst[0]),
++    .s_axi_0_arid                    (axi_arid[0]),
++    .s_axi_0_arlen                   (axi_arlen[0]),
++    .s_axi_0_arready                 (axi_arready[0]),
++    .s_axi_0_arsize                  (axi_arsize[0]),
++    .s_axi_0_arvalid                 (axi_arvalid[0]),
++    .s_axi_0_awaddr                  (axi_awaddr[0]),
++    .s_axi_0_awburst                 (axi_awburst[0]),
++    .s_axi_0_awid                    (axi_awid[0]),
++    .s_axi_0_awlen                   (axi_awlen[0]),
++    .s_axi_0_awready                 (axi_awready[0]),
++    .s_axi_0_awsize                  (axi_awsize[0]),
++    .s_axi_0_awvalid                 (axi_awvalid[0]),
++    .s_axi_0_bid                     (axi_bid[0]),
++    .s_axi_0_bready                  (axi_bready[0]),
++    .s_axi_0_bresp                   (axi_bresp[0]),
++    .s_axi_0_bvalid                  (axi_bvalid[0]),
++    .s_axi_0_rdata                   (axi_rdata[0]),
++    .s_axi_0_rid                     (axi_rid[0]),
++    .s_axi_0_rlast                   (axi_rlast[0]),
++    .s_axi_0_rready                  (axi_rready[0]),
++    .s_axi_0_rresp                   (axi_rresp[0]),
++    .s_axi_0_rvalid                  (axi_rvalid[0]),
++    .s_axi_0_wdata                   (axi_wdata[0]),
++    .s_axi_0_wlast                   (axi_wlast[0]),
++    .s_axi_0_wready                  (axi_wready[0]),
++    .s_axi_0_wstrb                   (axi_wstrb[0]),
++    .s_axi_0_wvalid                  (axi_wvalid[0]),
++ 
++    .s_axi_1_araddr                  (axi_araddr[1]),
++    .s_axi_1_arburst                 (axi_arburst[1]),
++    .s_axi_1_arid                    (axi_arid[1]),
++    .s_axi_1_arlen                   (axi_arlen[1]),
++    .s_axi_1_arready                 (axi_arready[1]),
++    .s_axi_1_arsize                  (axi_arsize[1]),
++    .s_axi_1_arvalid                 (axi_arvalid[1]),
++    .s_axi_1_awaddr                  (axi_awaddr[1]),
++    .s_axi_1_awburst                 (axi_awburst[1]),
++    .s_axi_1_awid                    (axi_awid[1]),
++    .s_axi_1_awlen                   (axi_awlen[1]),
++    .s_axi_1_awready                 (axi_awready[1]),
++    .s_axi_1_awsize                  (axi_awsize[1]),
++    .s_axi_1_awvalid                 (axi_awvalid[1]),
++    .s_axi_1_bid                     (axi_bid[1]),
++    .s_axi_1_bready                  (axi_bready[1]),
++    .s_axi_1_bresp                   (axi_bresp[1]),
++    .s_axi_1_bvalid                  (axi_bvalid[1]),
++    .s_axi_1_rdata                   (axi_rdata[1]),
++    .s_axi_1_rid                     (axi_rid[1]),
++    .s_axi_1_rlast                   (axi_rlast[1]),
++    .s_axi_1_rready                  (axi_rready[1]),
++    .s_axi_1_rresp                   (axi_rresp[1]),
++    .s_axi_1_rvalid                  (axi_rvalid[1]),
++    .s_axi_1_wdata                   (axi_wdata[1]),
++    .s_axi_1_wlast                   (axi_wlast[1]),
++    .s_axi_1_wready                  (axi_wready[1]),
++    .s_axi_1_wstrb                   (axi_wstrb[1]),
++    .s_axi_1_wvalid                  (axi_wvalid[1]),
++ 
++    .s_axi_2_araddr                  (axi_araddr[2]),
++    .s_axi_2_arburst                 (axi_arburst[2]),
++    .s_axi_2_arid                    (axi_arid[2]),
++    .s_axi_2_arlen                   (axi_arlen[2]),
++    .s_axi_2_arready                 (axi_arready[2]),
++    .s_axi_2_arsize                  (axi_arsize[2]),
++    .s_axi_2_arvalid                 (axi_arvalid[2]),
++    .s_axi_2_awaddr                  (axi_awaddr[2]),
++    .s_axi_2_awburst                 (axi_awburst[2]),
++    .s_axi_2_awid                    (axi_awid[2]),
++    .s_axi_2_awlen                   (axi_awlen[2]),
++    .s_axi_2_awready                 (axi_awready[2]),
++    .s_axi_2_awsize                  (axi_awsize[2]),
++    .s_axi_2_awvalid                 (axi_awvalid[2]),
++    .s_axi_2_bid                     (axi_bid[2]),
++    .s_axi_2_bready                  (axi_bready[2]),
++    .s_axi_2_bresp                   (axi_bresp[2]),
++    .s_axi_2_bvalid                  (axi_bvalid[2]),
++    .s_axi_2_rdata                   (axi_rdata[2]),
++    .s_axi_2_rid                     (axi_rid[2]),
++    .s_axi_2_rlast                   (axi_rlast[2]),
++    .s_axi_2_rready                  (axi_rready[2]),
++    .s_axi_2_rresp                   (axi_rresp[2]),
++    .s_axi_2_rvalid                  (axi_rvalid[2]),
++    .s_axi_2_wdata                   (axi_wdata[2]),
++    .s_axi_2_wlast                   (axi_wlast[2]),
++    .s_axi_2_wready                  (axi_wready[2]),
++    .s_axi_2_wstrb                   (axi_wstrb[2]),
++    .s_axi_2_wvalid                  (axi_wvalid[2]),
++ 
++    .s_axi_3_araddr                  (axi_araddr[3]),
++    .s_axi_3_arburst                 (axi_arburst[3]),
++    .s_axi_3_arid                    (axi_arid[3]),
++    .s_axi_3_arlen                   (axi_arlen[3]),
++    .s_axi_3_arready                 (axi_arready[3]),
++    .s_axi_3_arsize                  (axi_arsize[3]),
++    .s_axi_3_arvalid                 (axi_arvalid[3]),
++    .s_axi_3_awaddr                  (axi_awaddr[3]),
++    .s_axi_3_awburst                 (axi_awburst[3]),
++    .s_axi_3_awid                    (axi_awid[3]),
++    .s_axi_3_awlen                   (axi_awlen[3]),
++    .s_axi_3_awready                 (axi_awready[3]),
++    .s_axi_3_awsize                  (axi_awsize[3]),
++    .s_axi_3_awvalid                 (axi_awvalid[3]),
++    .s_axi_3_bid                     (axi_bid[3]),
++    .s_axi_3_bready                  (axi_bready[3]),
++    .s_axi_3_bresp                   (axi_bresp[3]),
++    .s_axi_3_bvalid                  (axi_bvalid[3]),
++    .s_axi_3_rdata                   (axi_rdata[3]),
++    .s_axi_3_rid                     (axi_rid[3]),
++    .s_axi_3_rlast                   (axi_rlast[3]),
++    .s_axi_3_rready                  (axi_rready[3]),
++    .s_axi_3_rresp                   (axi_rresp[3]),
++    .s_axi_3_rvalid                  (axi_rvalid[3]),
++    .s_axi_3_wdata                   (axi_wdata[3]),
++    .s_axi_3_wlast                   (axi_wlast[3]),
++    .s_axi_3_wready                  (axi_wready[3]),
++    .s_axi_3_wstrb                   (axi_wstrb[3]),
++    .s_axi_3_wvalid                  (axi_wvalid[3]),
++
 +    .s_axis_dm_s2mm_tvalid           (axis_dm_write_tvalid),
 +    .s_axis_dm_s2mm_tdata            (axis_dm_write_tdata),
 +    .s_axis_dm_s2mm_tkeep            (axis_dm_write_tkeep),
@@ -443,7 +1228,7 @@ index 4571b97..b8a40a2 100644
 +    .s_axis_dm_mm2s_cmd_tvalid       (axis_dm_read_cmd_tvalid),
 +    .s_axis_dm_mm2s_cmd_tdata        (axis_dm_read_cmd_tdata),
 +    .s_axis_dm_mm2s_cmd_tready       (axis_dm_read_cmd_tready),
-+
+ 
 +    .m_axis_dm_s2mm_status_tdata     (axis_write_sts_tdata),
 +    .m_axis_dm_s2mm_status_tkeep     (axis_write_sts_tkeep),
 +    .m_axis_dm_s2mm_status_tlast     (axis_write_sts_tlast),
@@ -460,14 +1245,11 @@ index 4571b97..b8a40a2 100644
 +    .apb_complete_1                  (apb_complete_1),
      .axi_clk                         (axi_clk),
 -    .axi_resetn                      (axi_resetn),
--    .hbm_ref_clk                     (hbm_ref_clk)
 +    .axi_resetn                      (axi_rstn),
-+    .hbm_ref_clk                     (hbm_ref_clk),
-+
-+    .bready                          (bready),
-+    .bresp                           (bresp),
-+    .bvalid                          (bvalid)
-+  );
+     .hbm_ref_clk                     (hbm_ref_clk)
+   );
+-  endmodule
+\ No newline at end of file
 +
 +  logic                      axis_parser_to_filter_tvalid;
 +  logic              [511:0] axis_parser_to_filter_tdata;
@@ -508,13 +1290,13 @@ index 4571b97..b8a40a2 100644
 +  logic                      axis_memory_to_engine_tlast;
 +  logic                      axis_memory_to_engine_tready;
 +
-+  st_metadata                mem_metadata_in;
++  logic [METADATA_WIDTH-1:0] mem_metadata_in;
 +  logic                      mem_metadata_in_valid;
 +               
-+  st_metadata                mem_metadata_out;
++  logic [METADATA_WIDTH-1:0] mem_metadata_out;
 +  logic                      mem_metadata_out_valid;
 +               
-+  st_metadata                engine_metadata_out;
++  logic [METADATA_WIDTH-1:0] engine_metadata_out;
 +  logic                      engine_metadata_out_valid;
 +
 +  logic   [METADATA_WIDTH:0] parser_metadata_in;
@@ -579,63 +1361,158 @@ index 4571b97..b8a40a2 100644
 +    .axis_rstn              (axi_rstn)
 +  );
 +
-+  memory_controller memory_controller_inst (
-+    .s_axis_tready            (axis_engine_to_memory_tready),
-+    .s_axis_tdata             (axis_engine_to_memory_tdata),
-+    .s_axis_tkeep             (axis_engine_to_memory_tkeep),
-+    .s_axis_tlast             (axis_engine_to_memory_tlast),
-+    .s_axis_tvalid            (axis_engine_to_memory_tvalid),
-+    .metadata_mem_in          (mem_metadata_out),
-+    .metadata_mem_in_valid    (mem_metadata_out_valid),
++  localparam logic [23:0] HASH_MATRIX [N_FUNCTIONS][63:0] = '{{
++      24'hA3C5D1, 24'hD4F921, 24'h98B337, 24'h345678,
++      24'hEAD00F, 24'hADC0DE, 24'h55AAAA, 24'hACE123,
++      24'hF23456, 24'hBEEF12, 24'h0FFEE0, 24'hBADB07,
++      24'hBCDEF0, 24'hBCDE12, 24'h4679BD, 24'h2468AC,
++      24'hAAAAAA, 24'hBBBBBB, 24'hCCCCCC, 24'h234567,
++      24'h654321, 24'hEDCBA9, 24'hACEACE, 24'hC001D0,
++      24'hEADC0D, 24'hADD00D, 24'h0DEC0D, 24'hDCAFE,
++      24'h3579BF, 24'h468ACE, 24'h579BDF, 24'h68ACED,
++      24'h55AAAA, 24'h66BBBB, 24'h77CCCC, 24'h88DDDD,
++      24'h99EEEE, 24'hAAFFFF, 24'hBBB111, 24'hCCC222,
++      24'hDDD333, 24'hEEE444, 24'hFFF555, 24'h111222,
++      24'h222333, 24'h333444, 24'h444555, 24'h555666,
++      24'h666777, 24'h777888, 24'h888999, 24'h999AAA,
++      24'hAAA111, 24'hBBB222, 24'hCCC333, 24'hDDD444,
++      24'hEEE555, 24'hFFF666, 24'h2345AB, 24'hDC123,
++      24'h4567CD, 24'h6789EF, 24'h89AB12, 24'hBCDEF3
++   }, {
++      24'h123456, 24'h234567, 24'h345678, 24'h456789,
++      24'h56789A, 24'h6789AB, 24'h789ABC, 24'h89ABCD,
++      24'h9ABCDE, 24'hABCDE0, 24'hBCDEF1, 24'hCDEF12,
++      24'hDEF123, 24'hEF1234, 24'hF12345, 24'h012345,
++      24'h111111, 24'h222222, 24'h333333, 24'h444444,
++      24'h555555, 24'h666666, 24'h777777, 24'h888888,
++      24'h999999, 24'hAAAAAA, 24'hBBBBBB, 24'hCCCCCC,
++      24'hDDDDDD, 24'hEEEEEE, 24'hFFFFFF, 24'h000000,
++      24'h13579B, 24'h2468AC, 24'h3579BD, 24'h468ACE,
++      24'h579BDF, 24'h68ACEF, 24'h79BDF0, 24'h8ACE01,
++      24'h9BDF12, 24'hACEF23, 24'hBDF034, 24'hCEF145,
++      24'hDF0256, 24'hEF1367, 24'hF02478, 24'h012589,
++      24'h12369A, 24'h2347AB, 24'h3458BC, 24'h4569CD,
++      24'h567ADE, 24'h678BEF, 24'h789C01, 24'h89AD12,
++      24'h9ABE23, 24'hABCF34, 24'hBC0145, 24'hCD1256,
++      24'hDE2367, 24'hEF3478, 24'hF04589, 24'h01269A
++   }, {
++      24'hFACE01, 24'hDEAD02, 24'hBEEF03, 24'hCAFE04,
++      24'hBABE05, 24'hFEED06, 24'hC0DE07, 24'hF00D08,
++      24'h1CED09, 24'hBAD10A, 24'hC0010B, 24'hDAD10C,
++      24'hACED0D, 24'hBA510E, 24'hD00D0F, 24'hFEED10,
++      24'h111AAA, 24'h222BBB, 24'h333CCC, 24'h444DDD,
++      24'h555EEE, 24'h666FFF, 24'h777000, 24'h888111,
++      24'h999222, 24'hAAA333, 24'hBBB444, 24'hCCC555,
++      24'hDDD666, 24'hEEE777, 24'hFFF888, 24'h000999,
++      24'hAAAA01, 24'hBBBB02, 24'hCCCC03, 24'hDDDD04,
++      24'hEEEE05, 24'hFFFF06, 24'h123407, 24'h234508,
++      24'h345609, 24'h45670A, 24'h56780B, 24'h67890C,
++      24'h789A0D, 24'h89AB0E, 24'h9ABC0F, 24'hABCD10,
++      24'hBCDE11, 24'hCDEF12, 24'hDEF013, 24'hEF0114,
++      24'hF01215, 24'h012316, 24'h123417, 24'h234518,
++      24'h345619, 24'h45671A, 24'h56781B, 24'h67891C,
++      24'h789A1D, 24'h89AB1E, 24'h9ABC1F, 24'hABCD20
++   }, {
++      24'h102938, 24'h293847, 24'h384756, 24'h475665,
++      24'h566574, 24'h665483, 24'h754392, 24'h843A01,
++      24'h932B10, 24'hA21C20, 24'hB10D30, 24'hC00E40,
++      24'hDF0F50, 24'hEE1060, 24'hFD1170, 24'h0C1280,
++      24'h1B1390, 24'h2A14A0, 24'h3915B0, 24'h4816C0,
++      24'h5717D0, 24'h6618E0, 24'h7519F0, 24'h842A00,
++      24'h933B10, 24'hA24C20, 24'hB15D30, 24'hC06E40,
++      24'hD17F50, 24'hE29060, 24'hF3A170, 24'h04B280,
++      24'h15C390, 24'h26D4A0, 24'h37E5B0, 24'h48F6C0,
++      24'h5907D0, 24'h6A18E0, 24'h7B29F0, 24'h8C3A00,
++      24'h9D4B10, 24'hAE5C20, 24'hBF6D30, 24'hD07E40,
++      24'hE18F50, 24'hF2A060, 24'h03B170, 24'h14C280,
++      24'h25D390, 24'h36E4A0, 24'h47F5B0, 24'h5806C0,
++      24'h6917D0, 24'h7A28E0, 24'h8B39F0, 24'h9C4A00,
++      24'hAD5B10, 24'hBE6C20, 24'hCF7D30, 24'hD08E40,
++      24'hE19F50, 24'hF2B060, 24'h03C170, 24'h14D280
++   }};
 +
-+    .m_axis_tready            (axis_memory_to_engine_tready),
-+    .m_axis_tdata             (axis_memory_to_engine_tdata),
-+    .m_axis_tkeep             (axis_memory_to_engine_tkeep),
-+    .m_axis_tlast             (axis_memory_to_engine_tlast),
-+    .m_axis_tvalid            (axis_memory_to_engine_tvalid),
-+    .metadata_mem_out         (mem_metadata_in),
-+    .metadata_mem_out_valid   (mem_metadata_in_valid),
 +
-+    .s_dm_axis_tvalid         (axis_dm_read_tvalid),
-+    .s_dm_axis_tdata          (axis_dm_read_tdata),
-+    .s_dm_axis_tkeep          (axis_dm_read_tkeep),
-+    .s_dm_axis_tlast          (axis_dm_read_tlast),
-+    .s_dm_axis_tready         (axis_dm_read_tready),
++  cuckoo_hash #(
++    .HASH_MATRIX                        (HASH_MATRIX)
++  ) cuckoo_hash_inst (
++    .m_axi_araddr                       (axi_araddr),
++    .m_axi_arburst                      (axi_arburst),
++    .m_axi_arcache                      (axi_arcache),
++    .m_axi_arid                         (axi_arid),
++    .m_axi_arlen                        (axi_arlen),
++    .m_axi_arlock                       (axi_arlock),
++    .m_axi_arprot                       (axi_arprot),
++    .m_axi_arready                      (axi_arready),
++    .m_axi_arsize                       (axi_arsize),
++    .m_axi_arvalid                      (axi_arvalid),
++    .m_axi_awaddr                       (axi_awaddr),
++    .m_axi_awburst                      (axi_awburst),
++    .m_axi_awcache                      (axi_awcache),
++    .m_axi_awid                         (axi_awid),
++    .m_axi_awlen                        (axi_awlen),
++    .m_axi_awlock                       (axi_awlock),
++    .m_axi_awprot                       (axi_awprot),
++    .m_axi_awready                      (axi_awready),
++    .m_axi_awsize                       (axi_awsize),
++    .m_axi_awvalid                      (axi_awvalid),
++    .m_axi_bid                          (axi_bid),
++    .m_axi_bready                       (axi_bready),
++    .m_axi_bresp                        (axi_bresp),
++    .m_axi_bvalid                       (axi_bvalid),
++    .m_axi_rdata                        (axi_rdata),
++    .m_axi_rid                          (axi_rid),
++    .m_axi_rlast                        (axi_rlast),
++    .m_axi_rready                       (axi_rready),
++    .m_axi_rresp                        (axi_rresp),
++    .m_axi_rvalid                       (axi_rvalid),
++    .m_axi_wdata                        (axi_wdata),
++    .m_axi_wlast                        (axi_wlast),
++    .m_axi_wready                       (axi_wready),
++    .m_axi_wstrb                        (axi_wstrb),
++    .m_axi_wvalid                       (axi_wvalid),
 +
-+    .m_dm_axis_tvalid         (axis_dm_write_tvalid),
-+    .m_dm_axis_tdata          (axis_dm_write_tdata),
-+    .m_dm_axis_tkeep          (axis_dm_write_tkeep),
-+    .m_dm_axis_tlast          (axis_dm_write_tlast),
-+    .m_dm_axis_tready         (axis_dm_write_tready),
++    .s_axis_tready                      (axis_engine_to_memory_tready),
++    .s_axis_tdata                       (axis_engine_to_memory_tdata),
++    .s_axis_tkeep                       (axis_engine_to_memory_tkeep),
++    .s_axis_tlast                       (axis_engine_to_memory_tlast),
++    .s_axis_tvalid                      (axis_engine_to_memory_tvalid),
++    .metadata_in                        (mem_metadata_out),
++    .metadata_in_valid                  (mem_metadata_out_valid),
 +
-+    .mm2s_cmd_tvalid          (axis_dm_read_cmd_tvalid),
-+    .mm2s_cmd_tdata           (axis_dm_read_cmd_tdata),
-+    .mm2s_cmd_tready          (axis_dm_read_cmd_tready),
++    .m_axis_tready                      (axis_memory_to_engine_tready),
++    .m_axis_tdata                       (axis_memory_to_engine_tdata),
++    .m_axis_tkeep                       (axis_memory_to_engine_tkeep),
++    .m_axis_tlast                       (axis_memory_to_engine_tlast),
++    .m_axis_tvalid                      (axis_memory_to_engine_tvalid),
++    .metadata_out                       (mem_metadata_in),
++    .metadata_out_valid                 (mem_metadata_in_valid),
 +
-+    .s2mm_cmd_tvalid          (axis_dm_write_cmd_tvalid),
-+    .s2mm_cmd_tdata           (axis_dm_write_cmd_tdata),
-+    .s2mm_cmd_tready          (axis_dm_write_cmd_tready),
++    .s_axis_dm_tvalid                   (axis_dm_read_tvalid),
++    .s_axis_dm_tdata                    (axis_dm_read_tdata),
++    .s_axis_dm_tkeep                    (axis_dm_read_tkeep),
++    .s_axis_dm_tlast                    (axis_dm_read_tlast),
++    .s_axis_dm_tready                   (axis_dm_read_tready),
 +
-+    .s_axis_mm2s_sts_tdata    (axis_read_sts_tdata),
-+    .s_axis_mm2s_sts_tkeep    (axis_read_sts_tkeep),
-+    .s_axis_mm2s_sts_tlast    (axis_read_sts_tlast),
-+    .s_axis_mm2s_sts_tvalid   (axis_read_sts_tvalid),
-+    .s_axis_mm2s_sts_tready   (axis_read_sts_tready),
++    .m_axis_dm_tvalid                   (axis_dm_write_tvalid),
++    .m_axis_dm_tdata                    (axis_dm_write_tdata),
++    .m_axis_dm_tkeep                    (axis_dm_write_tkeep),
++    .m_axis_dm_tlast                    (axis_dm_write_tlast),
++    .m_axis_dm_tready                   (axis_dm_write_tready),
 +
-+    .s_axis_s2mm_sts_tdata    (axis_write_sts_tdata),
-+    .s_axis_s2mm_sts_tkeep    (axis_write_sts_tkeep),
-+    .s_axis_s2mm_sts_tlast    (axis_write_sts_tlast),
-+    .s_axis_s2mm_sts_tvalid   (axis_write_sts_tvalid),
-+    .s_axis_s2mm_sts_tready   (axis_write_sts_tready),
++    .m_axis_dm_mm2s_cmd_tvalid          (axis_dm_read_cmd_tvalid),
++    .m_axis_dm_mm2s_cmd_tdata           (axis_dm_read_cmd_tdata),
++    .m_axis_dm_mm2s_cmd_tready          (axis_dm_read_cmd_tready),
 +
-+    .abp_complete0            (apb_complete),
-+    .aclk                     (axi_clk),
-+    .aresetn                  (axi_rstn),
++    .m_axis_dm_s2mm_cmd_tvalid          (axis_dm_write_cmd_tvalid),
++    .m_axis_dm_s2mm_cmd_tdata           (axis_dm_write_cmd_tdata),
++    .m_axis_dm_s2mm_cmd_tready          (axis_dm_write_cmd_tready),
 +
-+    .s_bresp                  (bresp),
-+    .s_bvalid                 (bvalid),
-+    .s_bready                 (bready)
++    .clk                                (axi_clk),
++    .rstn                               (axi_rstn && apb_complete)
 +  );
++
++  assign axis_read_sts_tready  = 1'b1;
++  assign axis_write_sts_tready = 1'b1;
 +
 +  logic vitis_net_p4_resetn;
 +  assign vitis_net_p4_resetn = axi_rstn && apb_complete;
@@ -700,9 +1577,7 @@ index 4571b97..b8a40a2 100644
 +
 +    .s_axis_aclk             (axi_clk),
 +    .s_axis_aresetn          (vitis_net_p4_resetn)
-   );
--  endmodule
-\ No newline at end of file
++  );
 +
 +  logic    [1:0] axis_filter_out_tvalid;
 +  logic [1023:0] axis_filter_out_tdata;
@@ -1990,6 +2865,32 @@ index 0000000..291d34f
 +
 +endmodule
 \ No newline at end of file
+diff --git a/src/hbm_subsystem/metadata.sv b/src/hbm_subsystem/metadata.sv
+new file mode 100644
+index 0000000..a9bd44b
+--- /dev/null
++++ b/src/hbm_subsystem/metadata.sv
+@@ -0,0 +1,19 @@
++package metadata_pkg;
++
++  typedef enum logic [7:0] {
++    READ,
++    WRITE,
++    READ_RESULT,
++    WRITE_ACK,
++    WRITE_ACK_LEADER
++  } opcode_t;
++
++  typedef struct packed {
++    logic          [31:0] ip;      // IPv4 address of the sender
++    logic          [47:0] mac;     // Mac address of the sender
++    logic           [7:0] opcode;  // Operation identifier used to distinguish consecutive writes
++    logic           [7:0] id;      // Operation code
++    logic          [63:0] key;
++  } st_metadata;
++
++endpackage
+\ No newline at end of file
 diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
 new file mode 100644
 index 0000000..8e99400
@@ -2533,19 +3434,13 @@ index 0000000..bfe00ae
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..0e5d6ff
+index 0000000..f6e3930
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
-@@ -0,0 +1,624 @@
+@@ -0,0 +1,615 @@
 +`timescale 1ns/1ps
 +
-+typedef struct packed {
-+  logic          [31:0] ip;      // IPv4 address of the sender
-+  logic          [47:0] mac;     // Mac address of the sender
-+  logic           [7:0] opcode;  // Operation identifier used to distinguish consecutive writes
-+  logic           [7:0] id;      // Operation code
-+  logic          [63:0] key;
-+} st_metadata;
++import metadata_pkg::*;
 +
 +module replication_engine #(
 +  parameter DATA_WIDTH = 512,
@@ -2602,14 +3497,6 @@ index 0000000..0e5d6ff
 +localparam FIFO_PTR_WIDTH = $clog2(FIFO_DEPTH);
 +localparam NODE_PTR_WIDTH = $clog2(NUM_NODES);
 +localparam METADATA_WIDTH = $bits(st_metadata);
-+
-+typedef enum logic [7:0] {
-+  READ,
-+  WRITE,
-+  READ_RESULT,
-+  WRITE_ACK,
-+  WRITE_ACK_LEADER
-+} opcode_t;
 +
 +typedef enum logic [1:0] {
 +  ACCEPT_NET,
@@ -2777,6 +3664,11 @@ index 0000000..0e5d6ff
 +      if (!net_meta_empty) begin
 +        case (net_meta_out.opcode)
 +          READ: begin
++            m_axis_mem_tvalid = 1'b1;
++            m_axis_mem_tdata  = '0;
++            m_axis_mem_tkeep  = '0;
++            m_axis_mem_tlast  = 1'b1;
++
 +            metadata_mem_out_valid = 1'b1;
 +            metadata_mem_out       = net_meta_out;
 +            if (m_axis_mem_tready)
