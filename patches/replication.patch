@@ -22,10 +22,10 @@ index 0000000..b50577f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/cuckoo_hash.sv b/src/hbm_subsystem/cuckoo_hash.sv
 new file mode 100644
-index 0000000..75ec389
+index 0000000..2542df7
 --- /dev/null
 +++ b/src/hbm_subsystem/cuckoo_hash.sv
-@@ -0,0 +1,623 @@
+@@ -0,0 +1,622 @@
 +import metadata_pkg::*;
 +
 +module cuckoo_hash # (
@@ -121,7 +121,7 @@ index 0000000..75ec389
 +  localparam int ADDRESS_SHIFT    = $clog2(BUCKET_SIZE);
 +  localparam int HASH_COUNT_WIDTH = $clog2(NUM_FUNCTIONS);
 +  localparam int KICK_COUNT_WIDTH = $clog2(MAX_KICKS);
-+  localparam logic [22:0] DM_BTT  = BUCKET_SIZE - 23'h4;
++  localparam logic [22:0] DM_BTT  = BUCKET_SIZE;
 +
 +  logic                  axis_buffer_in_tvalid;
 +  logic [DATA_WIDTH-1:0] axis_buffer_in_tdata;
@@ -179,7 +179,7 @@ index 0000000..75ec389
 +  dm_state_e                    dm_state,                           dm_state_next;
 +  hbm_read_state_e              hbm_read_state [NUM_FUNCTIONS],     hbm_read_state_next [NUM_FUNCTIONS];
 +  hbm_write_state_e             hbm_write_state [NUM_FUNCTIONS],    hbm_write_state_next [NUM_FUNCTIONS];
-+  logic                         stored_dirty [NUM_FUNCTIONS],       stored_dirty_next [NUM_FUNCTIONS];
++  logic                  [31:0] stored_dirty [NUM_FUNCTIONS],       stored_dirty_next [NUM_FUNCTIONS];
 +  logic         [KEY_WIDTH-1:0] stored_keys [NUM_FUNCTIONS],        stored_keys_next [NUM_FUNCTIONS];
 +  logic        [HASH_WIDTH-1:0] current_addresses [NUM_FUNCTIONS],  current_addresses_next [NUM_FUNCTIONS];
 +  logic         [KEY_WIDTH-1:0] current_key,                        current_key_next;
@@ -235,7 +235,7 @@ index 0000000..75ec389
 +
 +  function automatic logic no_collisions (
 +    input  logic                  read,
-+    input  logic                  stored_dirty [NUM_FUNCTIONS],
++    input  logic           [31:0] stored_dirty [NUM_FUNCTIONS],
 +    input  logic  [KEY_WIDTH-1:0] stored_keys [NUM_FUNCTIONS],
 +    input  logic [HASH_WIDTH-1:0] current_addresses [NUM_FUNCTIONS],
 +    input  logic  [KEY_WIDTH-1:0] current_key,
@@ -244,8 +244,8 @@ index 0000000..75ec389
 +    logic read_possible;
 +    logic write_possible;
 +    for (int i = 0; i < NUM_FUNCTIONS; i++) begin
-+      read_possible = stored_dirty[i] && stored_keys[i] == current_key;
-+      write_possible = !stored_dirty[i] || stored_keys[i] == current_key;
++      read_possible = stored_dirty[i] == DIRTY_TAG && stored_keys[i] == current_key;
++      write_possible = stored_dirty[i] != DIRTY_TAG || stored_keys[i] == current_key;
 +      if (read && read_possible || !read && write_possible) begin
 +        address = current_addresses[i];
 +        return 1'b1;
@@ -371,8 +371,8 @@ index 0000000..75ec389
 +        stop_hbm_read         = 1'b1;
 +        stop_buf_in           = 1'b1;
 +        start_dm_write        = 1'b1;
-+        start_hbm_write       = 1'b1;
-+        if (dm_state == DM_DONE && hbm_write_done(hbm_write_state)) begin
++        //start_hbm_write       = 1'b1;
++        if (dm_state == DM_DONE/* && hbm_write_done(hbm_write_state)*/) begin
 +          state_next = IDLE;
 +          // Assume meta fifo is not full
 +          metadata_out_valid = 1'b1;
@@ -523,7 +523,7 @@ index 0000000..75ec389
 +      end
 +      DM_CMD_READ: begin
 +        start_buf_in_from_dm = 1'b1;
-+        m_axis_dm_mm2s_cmd_tdata  = {8'b0, 6'b0, address, 10'h4, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
++        m_axis_dm_mm2s_cmd_tdata  = {8'b0, 6'b0, address, 10'h0, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
 +        m_axis_dm_mm2s_cmd_tvalid = 1'b1;
 +        if (m_axis_dm_mm2s_cmd_tready)
 +          if (start_dm_swap)
@@ -537,8 +537,7 @@ index 0000000..75ec389
 +      end
 +      DM_CMD_WRITE: begin
 +        start_buf_out_to_dm = 1'b1;
-+        // Jump dirty byte word
-+        m_axis_dm_s2mm_cmd_tdata  = {8'b0, 6'b0, address, 10'h4, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
++        m_axis_dm_s2mm_cmd_tdata  = {8'b0, 6'b0, address, 10'h0, 1'b0, 1'b1, 6'b0, 1'b1, DM_BTT};
 +        m_axis_dm_s2mm_cmd_tvalid = 1'b1;
 +        if (m_axis_dm_s2mm_cmd_tready)
 +          dm_state_next = DM_WRITE;
@@ -605,7 +604,7 @@ index 0000000..75ec389
 +            m_axi_rready[i]   = 1'b1;
 +            if (m_axi_rvalid[i]) begin
 +              hbm_read_state_next[i]  = HBM_READ_DONE;
-+              stored_dirty_next[i]    = m_axi_rdata[i][0];
++              stored_dirty_next[i]    = m_axi_rdata[i][31:0];
 +              stored_keys_next[i]     = {<< 8 {m_axi_rdata[i][32+:KEY_WIDTH]}};
 +            end
 +          end
@@ -648,6 +647,283 @@ index 0000000..75ec389
 +      end
 +    end
 +  endgenerate
++endmodule
+diff --git a/src/hbm_subsystem/election_engine.sv b/src/hbm_subsystem/election_engine.sv
+new file mode 100644
+index 0000000..f52de85
+--- /dev/null
++++ b/src/hbm_subsystem/election_engine.sv
+@@ -0,0 +1,271 @@
++import metadata_pkg::*; 
++
++module election_engine #(
++  parameter int NUM_NODES        = 5,
++  parameter int FIFO_DEPTH       = 32,
++  parameter int FOLLOWER_TIMEOUT = 25000000,  // 100ms
++  parameter int LEADER_TIMEOUT   = 12500000,  // 50ms
++  parameter  logic [31:0] NODE_IPS  [NUM_NODES] = '{default: '0},
++  parameter  logic [47:0] NODE_MACS [NUM_NODES] = '{default: '0}
++) (
++  input  logic [31:0] s_axi_awaddr,
++  input  logic        s_axi_awvalid,
++  output logic        s_axi_awready,
++  input  logic [31:0] s_axi_wdata,
++  input  logic  [7:0] s_axi_wstrb,
++  input  logic        s_axi_wvalid,
++  output logic        s_axi_wready,
++  output logic  [1:0] s_axi_bresp,
++  output logic        s_axi_bvalid,
++  input  logic        s_axi_bready,
++  input  logic [31:0] s_axi_araddr,
++  input  logic        s_axi_arvalid,
++  output logic        s_axi_arready,
++  output logic [31:0] s_axi_rdata,
++  output logic  [1:0] s_axi_rresp,
++  output logic        s_axi_rvalid,
++  input  logic        s_axi_rready,
++
++  input  st_metadata  metadata_in,
++  input  logic        metadata_in_valid,
++
++  output st_metadata  metadata_out,
++  output logic        metadata_out_valid,
++
++  input  logic        axis_aclk,
++  input  logic        axis_rstn
++);
++
++typedef enum logic [7:0] { 
++  FOLLOWER,
++  CANDIDATE,
++  LEADER
++} role_e;
++
++localparam VOTES_MAJORITY = NUM_NODES / 2 + 1;
++
++logic [31:0] timer, timer_next;
++logic  [7:0] term, term_next;
++logic  [7:0] leader, leader_next;
++logic  [7:0] sent, sent_next;
++logic  [7:0] votes, votes_next;
++role_e       role, role_next;
++
++logic axi_write_ready;
++logic axi_read_ready;
++logic meta_rd_en;
++logic meta_empty;
++logic meta_available;
++logic meta_out_valid;
++st_metadata meta;
++st_metadata meta_out;
++
++// Incoming metadata FIFO
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (METADATA_WIDTH),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
++) meta_fifo (
++  .wr_en               (metadata_in_valid),
++  .din                 (metadata_in),
++  .wr_ack              (),
++  .rd_en               (meta_rd_en),
++  .data_valid          (),
++  .dout                (meta),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (meta_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axis_aclk),
++  .rst                 (~axis_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++// FIXME: If master is not ready when address is sent, it misses the response
++assign axi_read_ready     = s_axi_arvalid && s_axi_rready;
++assign axi_write_ready    = s_axi_awvalid && s_axi_wvalid;
++assign meta_available     = !meta_empty;
++assign metadata_out_valid = meta_out_valid;
++assign metadata_out       = meta_out;
++
++// AXI Slave logic
++always_ff @(posedge axis_aclk) begin
++  if (!axis_rstn) begin
++    s_axi_awready  <= 1'b0;
++    s_axi_wready   <= 1'b0;
++    s_axi_bvalid   <= 1'b0;
++    s_axi_bresp    <= 2'b00;
++    s_axi_arready  <= 1'b0;
++    s_axi_rdata    <= '0;
++    s_axi_rresp    <= 2'b00;
++    s_axi_rvalid   <= 1'b0;
++  end 
++  else begin
++    s_axi_awready <= axi_write_ready;
++    s_axi_wready  <= axi_write_ready;
++    s_axi_arready <= axi_read_ready;
++    if (axi_write_ready) begin
++      s_axi_bvalid <= 1'b1;
++      case (s_axi_awaddr)
++        default:;
++      endcase
++    end
++    if (axi_read_ready) begin
++      s_axi_rvalid <= 1'b1;
++      case (s_axi_araddr)
++        32'h0:   s_axi_rdata <= timer;
++        32'h1:   s_axi_rdata <= role;
++        32'h2:   s_axi_rdata <= leader;
++        32'h3:   s_axi_rdata <= term;
++        default: s_axi_rdata <= '0;
++      endcase
++    end
++  end
++end
++
++// RAFT Leader Election
++always_ff @(posedge axis_aclk) begin
++  if (!axis_rstn) begin
++    timer  <= 0;
++    role   <= FOLLOWER;
++    term   <= 0;
++    leader <= 0;
++    votes  <= 0;
++    sent   <= 0;
++  end
++  else begin
++    timer  <= timer_next;
++    role   <= role_next;
++    term   <= term_next;
++    leader <= leader_next;
++    votes  <= votes_next;
++    sent   <= sent_next;
++  end
++end
++
++always_comb begin
++  meta_out_valid = 1'b0;
++  meta_out       = 0;
++  meta_rd_en     = 1'b0;
++  timer_next     = timer;
++  role_next      = role;
++  term_next      = term;
++  leader_next    = leader;
++  votes_next     = votes;
++  sent_next      = sent;
++  case (role)
++    FOLLOWER: begin
++      timer_next = timer + 1;
++      if (timer == FOLLOWER_TIMEOUT) begin
++        timer_next = 0;   
++        term_next  = term + 1;
++        role_next  = CANDIDATE;
++      end
++      else if (meta_available) begin
++        timer_next    = 0;
++        meta_rd_en = 1'b1;
++        case (meta.opcode)
++          HEARTBEAT: begin
++            meta_out_valid  = 1'b1;
++            meta_out.opcode = HEARTBEAT_ACK;
++            meta_out.index  = meta.index;
++            meta_out.ip     = meta.ip;
++            meta_out.mac    = meta.mac;
++          end
++          VOTE_REQUEST: begin
++            if (meta.index > term) begin
++              term_next       = meta.index;
++              leader_next     = meta.ip;
++              meta_out_valid  = 1'b1;
++              meta_out.opcode = VOTE;
++              meta_out.index  = meta.index;
++              meta_out.ip     = meta.ip;
++              meta_out.mac    = meta.mac;
++            end
++          end
++        endcase
++      end
++    end
++    CANDIDATE: begin
++      timer_next = timer + 1;
++      if (timer == FOLLOWER_TIMEOUT) begin
++        timer_next = 0;
++        sent_next  = 0;
++      end
++      if (sent != NUM_NODES - 1) begin  
++        sent_next       = sent + 1;
++        meta_out_valid  = 1'b1;
++        meta_out.opcode = VOTE_REQUEST;
++        meta_out.index  = term;
++        meta_out.ip     = NODE_IPS[sent + 1];
++        meta_out.mac    = NODE_MACS[sent + 1];
++      end
++      else if (meta_available) begin
++        meta_rd_en = 1'b1;
++        case (meta.opcode)
++          HEARTBEAT: begin
++            if (meta.index >= term) begin
++              sent_next       = 0;
++              role_next       = FOLLOWER;
++              term_next       = meta.index;
++              leader_next     = meta.ip;
++              meta_out_valid  = 1'b1;
++              meta_out.opcode = HEARTBEAT_ACK;
++              meta_out.index  = meta.index;
++              meta_out.ip     = meta.ip;
++              meta_out.mac    = meta.mac;
++            end
++          end
++          VOTE: begin
++            votes_next = votes + 1;
++            if (votes + 1 == VOTES_MAJORITY) begin
++              timer_next    = LEADER_TIMEOUT;
++              sent_next     = 0;
++              votes_next    = 0;
++              role_next     = LEADER;
++              leader_next   = NODE_IPS[0];
++            end
++          end
++        endcase
++      end
++    end
++    LEADER: begin
++      timer_next = timer + 1;
++      if (timer == LEADER_TIMEOUT) begin
++        timer_next = timer;
++        if (sent != NUM_NODES - 1) begin  
++          sent_next       = sent + 1;
++          meta_out_valid  = 1'b1;
++          meta_out.opcode = HEARTBEAT;
++          meta_out.index  = term;
++          meta_out.ip     = NODE_IPS[sent + 1];
++          meta_out.mac    = NODE_MACS[sent + 1];
++        end
++        else begin
++          timer_next    = 0;
++          sent_next = 0;
++        end
++      end
++    end
++  endcase
++end
++
 +endmodule
 diff --git a/src/hbm_subsystem/hbm_bd.tcl b/src/hbm_subsystem/hbm_bd.tcl
 index 97fedbc..f4fba96 100644
@@ -946,21 +1222,26 @@ index 97fedbc..f4fba96 100644
  
    # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..f6002ee 100644
+index 4571b97..f4a12b4 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
-@@ -1,4 +1,9 @@
+@@ -1,4 +1,14 @@
 -module hbm_subsystem (
++`timescale 1ns/1ps
++
++import metadata_pkg::*;
++
 +module hbm_subsystem #(
-+  parameter int NUM_NODES          = 2,
-+  parameter int BUCKET_SIZE        = 1024,        
++  parameter int NUM_NODES   = 2,
++  parameter int BUCKET_SIZE = 1024,
++  parameter int FIFO_DEPTH  = 64,
 +  parameter logic [31:0] NODE_IPS  [NUM_NODES] = '{default: '0},
 +  parameter logic [47:0] NODE_MACS [NUM_NODES] = '{default: '0}
 +) (
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
    input    [3:0] s_axi_arcache,
-@@ -40,11 +45,134 @@ module hbm_subsystem (
+@@ -40,55 +50,627 @@ module hbm_subsystem (
    input   [63:0] s_axi_wuser,
    input          s_axi_wvalid,
  
@@ -1006,672 +1287,636 @@ index 4571b97..f6002ee 100644
    input          hbm_ref_clk
  );
 -  
-+
-+  // Consider that parser's metadata's lsb has extra bit to indicate replication
-+  localparam METADATA_WIDTH     = 160;
-+  localparam FIFO_DEPTH         = 64;
-+  localparam NUM_HASH_FUNCTIONS = 4;
-+
-+  logic         axis_dm_write_tvalid;
-+  logic [511:0] axis_dm_write_tdata;
-+  logic  [63:0] axis_dm_write_tkeep;
-+  logic         axis_dm_write_tlast;
-+  logic         axis_dm_write_tready;
-+
-+  logic         axis_dm_read_tvalid;
-+  logic [511:0] axis_dm_read_tdata;
-+  logic  [63:0] axis_dm_read_tkeep;
-+  logic         axis_dm_read_tlast;
-+  logic         axis_dm_read_tready;
-+
-+  logic         axis_dm_write_cmd_tvalid;
-+  logic  [79:0] axis_dm_write_cmd_tdata;
-+  logic         axis_dm_write_cmd_tready;
-+
-+  logic         axis_dm_read_cmd_tvalid;
-+  logic  [79:0] axis_dm_read_cmd_tdata;
-+  logic         axis_dm_read_cmd_tready;
-+
-+  logic   [7:0] axis_write_sts_tdata;
-+  logic         axis_write_sts_tkeep;
-+  logic         axis_write_sts_tlast;
-+  logic         axis_write_sts_tvalid;
-+  logic         axis_write_sts_tready;
-+
-+  logic   [7:0] axis_read_sts_tdata;
-+  logic         axis_read_sts_tkeep;
-+  logic         axis_read_sts_tlast;
-+  logic         axis_read_sts_tvalid;
-+  logic         axis_read_sts_tready;
-+
-+  logic apb_complete_0, apb_complete_tmp, apb_complete;
-+  logic apb_complete_1;
-+
-+  always_ff @(posedge axi_clk) begin
-+    if(~axi_rstn) begin
-+      apb_complete_tmp <= 1'b0;
-+      apb_complete     <= 1'b0;
-+    end
-+    else begin
-+      apb_complete_tmp <= apb_complete_0;
-+      apb_complete     <= apb_complete_tmp;
-+    end
-+  end
-+
-+  logic  [33:0]  axi_araddr   [NUM_HASH_FUNCTIONS];
-+  logic   [1:0]  axi_arburst  [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_arcache  [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_arid     [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_arlen    [NUM_HASH_FUNCTIONS];
-+  logic   [1:0]  axi_arlock   [NUM_HASH_FUNCTIONS];
-+  logic   [2:0]  axi_arprot   [NUM_HASH_FUNCTIONS];
-+  logic          axi_arready  [NUM_HASH_FUNCTIONS];
-+  logic   [2:0]  axi_arsize   [NUM_HASH_FUNCTIONS];
-+  logic          axi_arvalid  [NUM_HASH_FUNCTIONS];
-+  logic  [33:0]  axi_awaddr   [NUM_HASH_FUNCTIONS];
-+  logic   [1:0]  axi_awburst  [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_awcache  [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_awid     [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_awlen    [NUM_HASH_FUNCTIONS];
-+  logic   [1:0]  axi_awlock   [NUM_HASH_FUNCTIONS];
-+  logic   [2:0]  axi_awprot   [NUM_HASH_FUNCTIONS];
-+  logic          axi_awready  [NUM_HASH_FUNCTIONS];
-+  logic   [2:0]  axi_awsize   [NUM_HASH_FUNCTIONS];
-+  logic          axi_awvalid  [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_bid      [NUM_HASH_FUNCTIONS];
-+  logic          axi_bready   [NUM_HASH_FUNCTIONS];
-+  logic   [1:0]  axi_bresp    [NUM_HASH_FUNCTIONS];
-+  logic          axi_bvalid   [NUM_HASH_FUNCTIONS];
-+  logic [255:0]  axi_rdata    [NUM_HASH_FUNCTIONS];
-+  logic   [3:0]  axi_rid      [NUM_HASH_FUNCTIONS];
-+  logic          axi_rlast    [NUM_HASH_FUNCTIONS];
-+  logic          axi_rready   [NUM_HASH_FUNCTIONS];
-+  logic   [1:0]  axi_rresp    [NUM_HASH_FUNCTIONS];
-+  logic          axi_rvalid   [NUM_HASH_FUNCTIONS];
-+  logic [255:0]  axi_wdata    [NUM_HASH_FUNCTIONS];
-+  logic          axi_wlast    [NUM_HASH_FUNCTIONS];
-+  logic          axi_wready   [NUM_HASH_FUNCTIONS];
-+  logic  [31:0]  axi_wstrb    [NUM_HASH_FUNCTIONS];
-+  logic          axi_wvalid   [NUM_HASH_FUNCTIONS];
-+
-   hbm_bd_wrapper hbm_inst (
-     .s_axi_hbm_araddr                (s_axi_araddr),
-     .s_axi_hbm_arburst               (s_axi_arburst),
-@@ -86,9 +214,573 @@ module hbm_subsystem (
-     .s_axi_hbm_wstrb                 (s_axi_wstrb),
-     .s_axi_hbm_wuser                 (s_axi_wuser),
-     .s_axi_hbm_wvalid                (s_axi_wvalid),
-+ 
-+    .s_axi_0_araddr                  (axi_araddr[0]),
-+    .s_axi_0_arburst                 (axi_arburst[0]),
-+    .s_axi_0_arid                    (axi_arid[0]),
-+    .s_axi_0_arlen                   (axi_arlen[0]),
-+    .s_axi_0_arready                 (axi_arready[0]),
-+    .s_axi_0_arsize                  (axi_arsize[0]),
-+    .s_axi_0_arvalid                 (axi_arvalid[0]),
-+    .s_axi_0_awaddr                  (axi_awaddr[0]),
-+    .s_axi_0_awburst                 (axi_awburst[0]),
-+    .s_axi_0_awid                    (axi_awid[0]),
-+    .s_axi_0_awlen                   (axi_awlen[0]),
-+    .s_axi_0_awready                 (axi_awready[0]),
-+    .s_axi_0_awsize                  (axi_awsize[0]),
-+    .s_axi_0_awvalid                 (axi_awvalid[0]),
-+    .s_axi_0_bid                     (axi_bid[0]),
-+    .s_axi_0_bready                  (axi_bready[0]),
-+    .s_axi_0_bresp                   (axi_bresp[0]),
-+    .s_axi_0_bvalid                  (axi_bvalid[0]),
-+    .s_axi_0_rdata                   (axi_rdata[0]),
-+    .s_axi_0_rid                     (axi_rid[0]),
-+    .s_axi_0_rlast                   (axi_rlast[0]),
-+    .s_axi_0_rready                  (axi_rready[0]),
-+    .s_axi_0_rresp                   (axi_rresp[0]),
-+    .s_axi_0_rvalid                  (axi_rvalid[0]),
-+    .s_axi_0_wdata                   (axi_wdata[0]),
-+    .s_axi_0_wlast                   (axi_wlast[0]),
-+    .s_axi_0_wready                  (axi_wready[0]),
-+    .s_axi_0_wstrb                   (axi_wstrb[0]),
-+    .s_axi_0_wvalid                  (axi_wvalid[0]),
-+ 
-+    .s_axi_1_araddr                  (axi_araddr[1]),
-+    .s_axi_1_arburst                 (axi_arburst[1]),
-+    .s_axi_1_arid                    (axi_arid[1]),
-+    .s_axi_1_arlen                   (axi_arlen[1]),
-+    .s_axi_1_arready                 (axi_arready[1]),
-+    .s_axi_1_arsize                  (axi_arsize[1]),
-+    .s_axi_1_arvalid                 (axi_arvalid[1]),
-+    .s_axi_1_awaddr                  (axi_awaddr[1]),
-+    .s_axi_1_awburst                 (axi_awburst[1]),
-+    .s_axi_1_awid                    (axi_awid[1]),
-+    .s_axi_1_awlen                   (axi_awlen[1]),
-+    .s_axi_1_awready                 (axi_awready[1]),
-+    .s_axi_1_awsize                  (axi_awsize[1]),
-+    .s_axi_1_awvalid                 (axi_awvalid[1]),
-+    .s_axi_1_bid                     (axi_bid[1]),
-+    .s_axi_1_bready                  (axi_bready[1]),
-+    .s_axi_1_bresp                   (axi_bresp[1]),
-+    .s_axi_1_bvalid                  (axi_bvalid[1]),
-+    .s_axi_1_rdata                   (axi_rdata[1]),
-+    .s_axi_1_rid                     (axi_rid[1]),
-+    .s_axi_1_rlast                   (axi_rlast[1]),
-+    .s_axi_1_rready                  (axi_rready[1]),
-+    .s_axi_1_rresp                   (axi_rresp[1]),
-+    .s_axi_1_rvalid                  (axi_rvalid[1]),
-+    .s_axi_1_wdata                   (axi_wdata[1]),
-+    .s_axi_1_wlast                   (axi_wlast[1]),
-+    .s_axi_1_wready                  (axi_wready[1]),
-+    .s_axi_1_wstrb                   (axi_wstrb[1]),
-+    .s_axi_1_wvalid                  (axi_wvalid[1]),
-+ 
-+    .s_axi_2_araddr                  (axi_araddr[2]),
-+    .s_axi_2_arburst                 (axi_arburst[2]),
-+    .s_axi_2_arid                    (axi_arid[2]),
-+    .s_axi_2_arlen                   (axi_arlen[2]),
-+    .s_axi_2_arready                 (axi_arready[2]),
-+    .s_axi_2_arsize                  (axi_arsize[2]),
-+    .s_axi_2_arvalid                 (axi_arvalid[2]),
-+    .s_axi_2_awaddr                  (axi_awaddr[2]),
-+    .s_axi_2_awburst                 (axi_awburst[2]),
-+    .s_axi_2_awid                    (axi_awid[2]),
-+    .s_axi_2_awlen                   (axi_awlen[2]),
-+    .s_axi_2_awready                 (axi_awready[2]),
-+    .s_axi_2_awsize                  (axi_awsize[2]),
-+    .s_axi_2_awvalid                 (axi_awvalid[2]),
-+    .s_axi_2_bid                     (axi_bid[2]),
-+    .s_axi_2_bready                  (axi_bready[2]),
-+    .s_axi_2_bresp                   (axi_bresp[2]),
-+    .s_axi_2_bvalid                  (axi_bvalid[2]),
-+    .s_axi_2_rdata                   (axi_rdata[2]),
-+    .s_axi_2_rid                     (axi_rid[2]),
-+    .s_axi_2_rlast                   (axi_rlast[2]),
-+    .s_axi_2_rready                  (axi_rready[2]),
-+    .s_axi_2_rresp                   (axi_rresp[2]),
-+    .s_axi_2_rvalid                  (axi_rvalid[2]),
-+    .s_axi_2_wdata                   (axi_wdata[2]),
-+    .s_axi_2_wlast                   (axi_wlast[2]),
-+    .s_axi_2_wready                  (axi_wready[2]),
-+    .s_axi_2_wstrb                   (axi_wstrb[2]),
-+    .s_axi_2_wvalid                  (axi_wvalid[2]),
-+ 
-+    .s_axi_3_araddr                  (axi_araddr[3]),
-+    .s_axi_3_arburst                 (axi_arburst[3]),
-+    .s_axi_3_arid                    (axi_arid[3]),
-+    .s_axi_3_arlen                   (axi_arlen[3]),
-+    .s_axi_3_arready                 (axi_arready[3]),
-+    .s_axi_3_arsize                  (axi_arsize[3]),
-+    .s_axi_3_arvalid                 (axi_arvalid[3]),
-+    .s_axi_3_awaddr                  (axi_awaddr[3]),
-+    .s_axi_3_awburst                 (axi_awburst[3]),
-+    .s_axi_3_awid                    (axi_awid[3]),
-+    .s_axi_3_awlen                   (axi_awlen[3]),
-+    .s_axi_3_awready                 (axi_awready[3]),
-+    .s_axi_3_awsize                  (axi_awsize[3]),
-+    .s_axi_3_awvalid                 (axi_awvalid[3]),
-+    .s_axi_3_bid                     (axi_bid[3]),
-+    .s_axi_3_bready                  (axi_bready[3]),
-+    .s_axi_3_bresp                   (axi_bresp[3]),
-+    .s_axi_3_bvalid                  (axi_bvalid[3]),
-+    .s_axi_3_rdata                   (axi_rdata[3]),
-+    .s_axi_3_rid                     (axi_rid[3]),
-+    .s_axi_3_rlast                   (axi_rlast[3]),
-+    .s_axi_3_rready                  (axi_rready[3]),
-+    .s_axi_3_rresp                   (axi_rresp[3]),
-+    .s_axi_3_rvalid                  (axi_rvalid[3]),
-+    .s_axi_3_wdata                   (axi_wdata[3]),
-+    .s_axi_3_wlast                   (axi_wlast[3]),
-+    .s_axi_3_wready                  (axi_wready[3]),
-+    .s_axi_3_wstrb                   (axi_wstrb[3]),
-+    .s_axi_3_wvalid                  (axi_wvalid[3]),
-+
-+    .s_axis_dm_s2mm_tvalid           (axis_dm_write_tvalid),
-+    .s_axis_dm_s2mm_tdata            (axis_dm_write_tdata),
-+    .s_axis_dm_s2mm_tkeep            (axis_dm_write_tkeep),
-+    .s_axis_dm_s2mm_tlast            (axis_dm_write_tlast),
-+    .s_axis_dm_s2mm_tready           (axis_dm_write_tready),
-+
-+    .m_axis_dm_mm2s_tvalid           (axis_dm_read_tvalid),
-+    .m_axis_dm_mm2s_tdata            (axis_dm_read_tdata),
-+    .m_axis_dm_mm2s_tkeep            (axis_dm_read_tkeep),
-+    .m_axis_dm_mm2s_tlast            (axis_dm_read_tlast),
-+    .m_axis_dm_mm2s_tready           (axis_dm_read_tready),
-+
-+    .s_axis_dm_s2mm_cmd_tvalid       (axis_dm_write_cmd_tvalid),
-+    .s_axis_dm_s2mm_cmd_tdata        (axis_dm_write_cmd_tdata),
-+    .s_axis_dm_s2mm_cmd_tready       (axis_dm_write_cmd_tready),
-+
-+    .s_axis_dm_mm2s_cmd_tvalid       (axis_dm_read_cmd_tvalid),
-+    .s_axis_dm_mm2s_cmd_tdata        (axis_dm_read_cmd_tdata),
-+    .s_axis_dm_mm2s_cmd_tready       (axis_dm_read_cmd_tready),
- 
-+    .m_axis_dm_s2mm_status_tdata     (axis_write_sts_tdata),
-+    .m_axis_dm_s2mm_status_tkeep     (axis_write_sts_tkeep),
-+    .m_axis_dm_s2mm_status_tlast     (axis_write_sts_tlast),
-+    .m_axis_dm_s2mm_status_tvalid    (axis_write_sts_tvalid),
-+    .m_axis_dm_s2mm_status_tready    (axis_write_sts_tready),
-+
-+    .m_axis_dm_mm2s_status_tdata     (axis_read_sts_tdata),
-+    .m_axis_dm_mm2s_status_tkeep     (axis_read_sts_tkeep),
-+    .m_axis_dm_mm2s_status_tlast     (axis_read_sts_tlast),
-+    .m_axis_dm_mm2s_status_tvalid    (axis_read_sts_tvalid),
-+    .m_axis_dm_mm2s_status_tready    (axis_read_sts_tready),
-+
-+    .apb_complete_0                  (apb_complete_0),
-+    .apb_complete_1                  (apb_complete_1),
-     .axi_clk                         (axi_clk),
+-  hbm_bd_wrapper hbm_inst (
+-    .s_axi_hbm_araddr                (s_axi_araddr),
+-    .s_axi_hbm_arburst               (s_axi_arburst),
+-    .s_axi_hbm_arcache               (s_axi_arcache),
+-    .s_axi_hbm_arid                  (s_axi_arid),
+-    .s_axi_hbm_arlen                 (s_axi_arlen),
+-    .s_axi_hbm_arlock                (s_axi_arlock),
+-    .s_axi_hbm_arprot                (s_axi_arprot),
+-    .s_axi_hbm_arqos                 (s_axi_arqos),
+-    .s_axi_hbm_arready               (s_axi_arready),
+-    .s_axi_hbm_arsize                (s_axi_arsize),
+-    .s_axi_hbm_aruser                (s_axi_aruser),
+-    .s_axi_hbm_arvalid               (s_axi_arvalid),
+-    .s_axi_hbm_awaddr                (s_axi_awaddr),
+-    .s_axi_hbm_awburst               (s_axi_awburst),
+-    .s_axi_hbm_awcache               (s_axi_awcache),
+-    .s_axi_hbm_awid                  (s_axi_awid),
+-    .s_axi_hbm_awlen                 (s_axi_awlen),
+-    .s_axi_hbm_awlock                (s_axi_awlock),
+-    .s_axi_hbm_awprot                (s_axi_awprot),
+-    .s_axi_hbm_awqos                 (s_axi_awqos),
+-    .s_axi_hbm_awready               (s_axi_awready),
+-    .s_axi_hbm_awsize                (s_axi_awsize),
+-    .s_axi_hbm_awuser                (s_axi_awuser),
+-    .s_axi_hbm_awvalid               (s_axi_awvalid),
+-    .s_axi_hbm_bid                   (s_axi_bid),
+-    .s_axi_hbm_bready                (s_axi_bready),
+-    .s_axi_hbm_bresp                 (s_axi_bresp),
+-    .s_axi_hbm_bvalid                (s_axi_bvalid),
+-    .s_axi_hbm_rdata                 (s_axi_rdata),
+-    .s_axi_hbm_rid                   (s_axi_rid),
+-    .s_axi_hbm_rlast                 (s_axi_rlast),
+-    .s_axi_hbm_rready                (s_axi_rready),
+-    .s_axi_hbm_rresp                 (s_axi_rresp),
+-    .s_axi_hbm_rvalid                (s_axi_rvalid),
+-    .s_axi_hbm_wdata                 (s_axi_wdata),
+-    .s_axi_hbm_wlast                 (s_axi_wlast),
+-    .s_axi_hbm_wready                (s_axi_wready),
+-    .s_axi_hbm_wstrb                 (s_axi_wstrb),
+-    .s_axi_hbm_wuser                 (s_axi_wuser),
+-    .s_axi_hbm_wvalid                (s_axi_wvalid),
+-
+-    .axi_clk                         (axi_clk),
 -    .axi_resetn                      (axi_resetn),
-+    .axi_resetn                      (axi_rstn),
-     .hbm_ref_clk                     (hbm_ref_clk)
-   );
+-    .hbm_ref_clk                     (hbm_ref_clk)
+-  );
 -  endmodule
 \ No newline at end of file
 +
-+  logic                      axis_parser_to_filter_tvalid;
-+  logic              [511:0] axis_parser_to_filter_tdata;
-+  logic               [63:0] axis_parser_to_filter_tkeep;
-+  logic                      axis_parser_to_filter_tlast;
-+  logic               [15:0] axis_parser_to_filter_tuser_size;
-+  logic               [15:0] axis_parser_to_filter_tuser_src;
-+  logic               [15:0] axis_parser_to_filter_tuser_dst;
-+  logic                      axis_parser_to_filter_tready;
++localparam NUM_HASHES    = 4;
++localparam ADDRESS_WIDTH = 34;  // 16 GB
++localparam HASH_WIDTH    = ADDRESS_WIDTH - $clog2(BUCKET_SIZE);
 +
-+  logic                      axis_filter_to_engine_tvalid;
-+  logic              [511:0] axis_filter_to_engine_tdata;
-+  logic               [63:0] axis_filter_to_engine_tkeep;
-+  logic                      axis_filter_to_engine_tlast;
-+  logic                      axis_filter_to_engine_tready;
++localparam logic [HASH_WIDTH-1:0] HASH_MATRIX [NUM_HASHES][KEY_WIDTH-1:0] = '{{
++  24'hA3C5D1, 24'hD4F921, 24'h98B337, 24'h345678,
++  24'hEAD00F, 24'hADC0DE, 24'h55AAAA, 24'hACE123,
++  24'hF23456, 24'hBEEF12, 24'h0FFEE0, 24'hBADB07,
++  24'hBCDEF0, 24'hBCDE12, 24'h4679BD, 24'h2468AC,
++  24'hAAAAAA, 24'hBBBBBB, 24'hCCCCCC, 24'h234567,
++  24'h654321, 24'hEDCBA9, 24'hACEACE, 24'hC001D0,
++  24'hEADC0D, 24'hADD00D, 24'h0DEC0D, 24'hDCAFE,
++  24'h3579BF, 24'h468ACE, 24'h579BDF, 24'h68ACED,
++  24'h55AAAA, 24'h66BBBB, 24'h77CCCC, 24'h88DDDD,
++  24'h99EEEE, 24'hAAFFFF, 24'hBBB111, 24'hCCC222,
++  24'hDDD333, 24'hEEE444, 24'hFFF555, 24'h111222,
++  24'h222333, 24'h333444, 24'h444555, 24'h555666,
++  24'h666777, 24'h777888, 24'h888999, 24'h999AAA,
++  24'hAAA111, 24'hBBB222, 24'hCCC333, 24'hDDD444,
++  24'hEEE555, 24'hFFF666, 24'h2345AB, 24'hDC123,
++  24'h4567CD, 24'h6789EF, 24'h89AB12, 24'hBCDEF3
++}, {
++  24'h123456, 24'h234567, 24'h345678, 24'h456789,
++  24'h56789A, 24'h6789AB, 24'h789ABC, 24'h89ABCD,
++  24'h9ABCDE, 24'hABCDE0, 24'hBCDEF1, 24'hCDEF12,
++  24'hDEF123, 24'hEF1234, 24'hF12345, 24'h012345,
++  24'h111111, 24'h222222, 24'h333333, 24'h444444,
++  24'h555555, 24'h666666, 24'h777777, 24'h888888,
++  24'h999999, 24'hAAAAAA, 24'hBBBBBB, 24'hCCCCCC,
++  24'hDDDDDD, 24'hEEEEEE, 24'hFFFFFF, 24'h000000,
++  24'h13579B, 24'h2468AC, 24'h3579BD, 24'h468ACE,
++  24'h579BDF, 24'h68ACEF, 24'h79BDF0, 24'h8ACE01,
++  24'h9BDF12, 24'hACEF23, 24'hBDF034, 24'hCEF145,
++  24'hDF0256, 24'hEF1367, 24'hF02478, 24'h012589,
++  24'h12369A, 24'h2347AB, 24'h3458BC, 24'h4569CD,
++  24'h567ADE, 24'h678BEF, 24'h789C01, 24'h89AD12,
++  24'h9ABE23, 24'hABCF34, 24'hBC0145, 24'hCD1256,
++  24'hDE2367, 24'hEF3478, 24'hF04589, 24'h01269A
++}, {
++  24'hFACE01, 24'hDEAD02, 24'hBEEF03, 24'hCAFE04,
++  24'hBABE05, 24'hFEED06, 24'hC0DE07, 24'hF00D08,
++  24'h1CED09, 24'hBAD10A, 24'hC0010B, 24'hDAD10C,
++  24'hACED0D, 24'hBA510E, 24'hD00D0F, 24'hFEED10,
++  24'h111AAA, 24'h222BBB, 24'h333CCC, 24'h444DDD,
++  24'h555EEE, 24'h666FFF, 24'h777000, 24'h888111,
++  24'h999222, 24'hAAA333, 24'hBBB444, 24'hCCC555,
++  24'hDDD666, 24'hEEE777, 24'hFFF888, 24'h000999,
++  24'hAAAA01, 24'hBBBB02, 24'hCCCC03, 24'hDDDD04,
++  24'hEEEE05, 24'hFFFF06, 24'h123407, 24'h234508,
++  24'h345609, 24'h45670A, 24'h56780B, 24'h67890C,
++  24'h789A0D, 24'h89AB0E, 24'h9ABC0F, 24'hABCD10,
++  24'hBCDE11, 24'hCDEF12, 24'hDEF013, 24'hEF0114,
++  24'hF01215, 24'h012316, 24'h123417, 24'h234518,
++  24'h345619, 24'h45671A, 24'h56781B, 24'h67891C,
++  24'h789A1D, 24'h89AB1E, 24'h9ABC1F, 24'hABCD20
++}, {
++  24'h102938, 24'h293847, 24'h384756, 24'h475665,
++  24'h566574, 24'h665483, 24'h754392, 24'h843A01,
++  24'h932B10, 24'hA21C20, 24'hB10D30, 24'hC00E40,
++  24'hDF0F50, 24'hEE1060, 24'hFD1170, 24'h0C1280,
++  24'h1B1390, 24'h2A14A0, 24'h3915B0, 24'h4816C0,
++  24'h5717D0, 24'h6618E0, 24'h7519F0, 24'h842A00,
++  24'h933B10, 24'hA24C20, 24'hB15D30, 24'hC06E40,
++  24'hD17F50, 24'hE29060, 24'hF3A170, 24'h04B280,
++  24'h15C390, 24'h26D4A0, 24'h37E5B0, 24'h48F6C0,
++  24'h5907D0, 24'h6A18E0, 24'h7B29F0, 24'h8C3A00,
++  24'h9D4B10, 24'hAE5C20, 24'hBF6D30, 24'hD07E40,
++  24'hE18F50, 24'hF2A060, 24'h03B170, 24'h14C280,
++  24'h25D390, 24'h36E4A0, 24'h47F5B0, 24'h5806C0,
++  24'h6917D0, 24'h7A28E0, 24'h8B39F0, 24'h9C4A00,
++  24'hAD5B10, 24'hBE6C20, 24'hCF7D30, 24'hD08E40,
++  24'hE19F50, 24'hF2B060, 24'h03C170, 24'h14D280
++}};
 +
-+  logic                      axis_engine_to_deparser_tvalid;
-+  logic              [511:0] axis_engine_to_deparser_tdata;
-+  logic               [63:0] axis_engine_to_deparser_tkeep;
-+  logic                      axis_engine_to_deparser_tlast;
-+  logic                      axis_engine_to_deparser_tready;
++logic  [33:0]  axi_araddr   [NUM_HASHES];
++logic   [1:0]  axi_arburst  [NUM_HASHES];
++logic   [3:0]  axi_arcache  [NUM_HASHES];
++logic   [3:0]  axi_arid     [NUM_HASHES];
++logic   [3:0]  axi_arlen    [NUM_HASHES];
++logic   [1:0]  axi_arlock   [NUM_HASHES];
++logic   [2:0]  axi_arprot   [NUM_HASHES];
++logic          axi_arready  [NUM_HASHES];
++logic   [2:0]  axi_arsize   [NUM_HASHES];
++logic          axi_arvalid  [NUM_HASHES];
++logic  [33:0]  axi_awaddr   [NUM_HASHES];
++logic   [1:0]  axi_awburst  [NUM_HASHES];
++logic   [3:0]  axi_awcache  [NUM_HASHES];
++logic   [3:0]  axi_awid     [NUM_HASHES];
++logic   [3:0]  axi_awlen    [NUM_HASHES];
++logic   [1:0]  axi_awlock   [NUM_HASHES];
++logic   [2:0]  axi_awprot   [NUM_HASHES];
++logic          axi_awready  [NUM_HASHES];
++logic   [2:0]  axi_awsize   [NUM_HASHES];
++logic          axi_awvalid  [NUM_HASHES];
++logic   [3:0]  axi_bid      [NUM_HASHES];
++logic          axi_bready   [NUM_HASHES];
++logic   [1:0]  axi_bresp    [NUM_HASHES];
++logic          axi_bvalid   [NUM_HASHES];
++logic [255:0]  axi_rdata    [NUM_HASHES];
++logic   [3:0]  axi_rid      [NUM_HASHES];
++logic          axi_rlast    [NUM_HASHES];
++logic          axi_rready   [NUM_HASHES];
++logic   [1:0]  axi_rresp    [NUM_HASHES];
++logic          axi_rvalid   [NUM_HASHES];
++logic [255:0]  axi_wdata    [NUM_HASHES];
++logic          axi_wlast    [NUM_HASHES];
++logic          axi_wready   [NUM_HASHES];
++logic  [31:0]  axi_wstrb    [NUM_HASHES];
++logic          axi_wvalid   [NUM_HASHES];
 +
-+  logic                      axis_deparser_to_arbiter_tvalid;
-+  logic              [511:0] axis_deparser_to_arbiter_tdata;
-+  logic               [63:0] axis_deparser_to_arbiter_tkeep;
-+  logic                      axis_deparser_to_arbiter_tlast;
-+  logic                      axis_deparser_to_arbiter_tready;
++logic         axis_dm_write_tvalid;
++logic [511:0] axis_dm_write_tdata;
++logic  [63:0] axis_dm_write_tkeep;
++logic         axis_dm_write_tlast;
++logic         axis_dm_write_tready;
 +
-+  logic                      axis_engine_to_memory_tvalid;
-+  logic              [511:0] axis_engine_to_memory_tdata;
-+  logic               [63:0] axis_engine_to_memory_tkeep;
-+  logic                      axis_engine_to_memory_tlast;
-+  logic                      axis_engine_to_memory_tready;
++logic         axis_dm_read_tvalid;
++logic [511:0] axis_dm_read_tdata;
++logic  [63:0] axis_dm_read_tkeep;
++logic         axis_dm_read_tlast;
++logic         axis_dm_read_tready;
 +
-+  logic                      axis_memory_to_engine_tvalid;
-+  logic              [511:0] axis_memory_to_engine_tdata;
-+  logic               [63:0] axis_memory_to_engine_tkeep;
-+  logic                      axis_memory_to_engine_tlast;
-+  logic                      axis_memory_to_engine_tready;
++logic         axis_dm_write_cmd_tvalid;
++logic  [79:0] axis_dm_write_cmd_tdata;
++logic         axis_dm_write_cmd_tready;
 +
-+  logic [METADATA_WIDTH-1:0] mem_metadata_in;
-+  logic                      mem_metadata_in_valid;
-+               
-+  logic [METADATA_WIDTH-1:0] mem_metadata_out;
-+  logic                      mem_metadata_out_valid;
-+               
-+  logic [METADATA_WIDTH-1:0] engine_metadata_out;
-+  logic                      engine_metadata_out_valid;
++logic         axis_dm_read_cmd_tvalid;
++logic  [79:0] axis_dm_read_cmd_tdata;
++logic         axis_dm_read_cmd_tready;
 +
-+  logic   [METADATA_WIDTH:0] parser_metadata_in;
-+  logic                      parser_metadata_in_valid;
++logic   [7:0] axis_dm_write_sts_tdata;
++logic         axis_dm_write_sts_tkeep;
++logic         axis_dm_write_sts_tlast;
++logic         axis_dm_write_sts_tvalid;
++logic         axis_dm_write_sts_tready;
 +
-+  logic   [METADATA_WIDTH:0] parser_metadata_out;
-+  logic                      parser_metadata_out_valid;
++logic   [7:0] axis_dm_read_sts_tdata;
++logic         axis_dm_read_sts_tkeep;
++logic         axis_dm_read_sts_tlast;
++logic         axis_dm_read_sts_tvalid;
++logic         axis_dm_read_sts_tready;
 +
-+  // Buffer the switch for the packet filter
-+  logic is_replication;
-+  logic is_replication_buf;
++logic         axis_parser_to_filter_tvalid;
++logic [511:0] axis_parser_to_filter_tdata;
++logic  [63:0] axis_parser_to_filter_tkeep;
++logic         axis_parser_to_filter_tlast;
++logic         axis_parser_to_filter_tready;
 +
-+  always_ff @(posedge axi_clk) begin
-+    if(~axi_rstn)
-+    begin
-+      is_replication_buf <= 1'b0;
-+    end
-+    else begin
-+      if (parser_metadata_out_valid) 
-+        is_replication_buf <= parser_metadata_out[0];
-+      else
-+        is_replication_buf <= is_replication_buf;
-+    end
++logic         axis_filter_to_replication_tvalid;
++logic [511:0] axis_filter_to_replication_tdata;
++logic  [63:0] axis_filter_to_replication_tkeep;
++logic         axis_filter_to_replication_tlast;
++logic         axis_filter_to_replication_tready;
++
++logic         axis_replication_to_deparser_tvalid;
++logic [511:0] axis_replication_to_deparser_tdata;
++logic  [63:0] axis_replication_to_deparser_tkeep;
++logic         axis_replication_to_deparser_tlast;
++logic         axis_replication_to_deparser_tready;
++
++logic         axis_deparser_to_arbiter_tvalid;
++logic [511:0] axis_deparser_to_arbiter_tdata;
++logic  [63:0] axis_deparser_to_arbiter_tkeep;
++logic         axis_deparser_to_arbiter_tlast;
++logic         axis_deparser_to_arbiter_tready;
++
++st_metadata parser_metadata;
++logic       parser_metadata_valid;
++st_metadata replication_metadata;
++logic       replication_metadata_valid;
++
++assign axis_dm_write_sts_tready = 1'b1;
++assign axis_dm_read_sts_tready  = 1'b1;
++
++// The reset waits until the HBM has finished initial configuration
++logic apb_complete_0;
++logic apb_complete_reg;
++logic rstn;
++
++assign rstn = axi_rstn && apb_complete_reg;
++
++always_ff @(posedge axi_clk) begin
++  if(~axi_rstn)
++    apb_complete_reg <= 1'b0;
++  else
++    apb_complete_reg <= apb_complete_0;
++end
++
++// The valid signal for the parser's incoming user metadata is raised only on the first beat
++logic parser_metadata_in_valid;
++logic parser_metadata_in_valid_toggle;
++
++assign parser_metadata_in_valid = parser_metadata_in_valid_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
++
++always_ff @(posedge axi_clk) begin
++  if(~axi_rstn) begin
++    parser_metadata_in_valid_toggle <= 1'b1;
 +  end
-+
-+  assign is_replication = parser_metadata_out_valid ? parser_metadata_out[0] : is_replication_buf;
-+
-+  replication_engine #(
-+    .NUM_NODES              (NUM_NODES),
-+    .DATA_WIDTH             (512),
-+    .NODE_IPS               (NODE_IPS),
-+    .NODE_MACS              (NODE_MACS)
-+  ) replication_engine_inst (
-+    .s_axis_tvalid          (axis_filter_to_engine_tvalid),
-+    .s_axis_tdata           (axis_filter_to_engine_tdata),
-+    .s_axis_tkeep           (axis_filter_to_engine_tkeep),
-+    .s_axis_tlast           (axis_filter_to_engine_tlast),
-+    .s_axis_tready          (axis_filter_to_engine_tready),
-+    .metadata_in            (parser_metadata_out[METADATA_WIDTH:1]),
-+    .metadata_in_valid      (parser_metadata_out_valid && is_replication),
-+
-+    .m_axis_tvalid          (axis_engine_to_deparser_tvalid),
-+    .m_axis_tdata           (axis_engine_to_deparser_tdata),
-+    .m_axis_tkeep           (axis_engine_to_deparser_tkeep),
-+    .m_axis_tlast           (axis_engine_to_deparser_tlast),
-+    .m_axis_tready          (axis_engine_to_deparser_tready),
-+    .metadata_out           (engine_metadata_out),
-+    .metadata_out_valid     (engine_metadata_out_valid),
-+
-+    .s_axis_mem_tvalid      (axis_memory_to_engine_tvalid),
-+    .s_axis_mem_tdata       (axis_memory_to_engine_tdata),
-+    .s_axis_mem_tkeep       (axis_memory_to_engine_tkeep),
-+    .s_axis_mem_tlast       (axis_memory_to_engine_tlast),
-+    .s_axis_mem_tready      (axis_memory_to_engine_tready),
-+    .metadata_mem_in        (mem_metadata_in),
-+    .metadata_mem_in_valid  (mem_metadata_in_valid),
-+
-+    .m_axis_mem_tvalid      (axis_engine_to_memory_tvalid),
-+    .m_axis_mem_tdata       (axis_engine_to_memory_tdata),
-+    .m_axis_mem_tkeep       (axis_engine_to_memory_tkeep),
-+    .m_axis_mem_tlast       (axis_engine_to_memory_tlast),
-+    .m_axis_mem_tready      (axis_engine_to_memory_tready),
-+    .metadata_mem_out       (mem_metadata_out),
-+    .metadata_mem_out_valid (mem_metadata_out_valid),
-+
-+    .axis_clk               (axi_clk),
-+    .axis_rstn              (axi_rstn)
-+  );
-+
-+  localparam logic [23:0] HASH_MATRIX [NUM_HASH_FUNCTIONS][63:0] = '{{
-+      24'hA3C5D1, 24'hD4F921, 24'h98B337, 24'h345678,
-+      24'hEAD00F, 24'hADC0DE, 24'h55AAAA, 24'hACE123,
-+      24'hF23456, 24'hBEEF12, 24'h0FFEE0, 24'hBADB07,
-+      24'hBCDEF0, 24'hBCDE12, 24'h4679BD, 24'h2468AC,
-+      24'hAAAAAA, 24'hBBBBBB, 24'hCCCCCC, 24'h234567,
-+      24'h654321, 24'hEDCBA9, 24'hACEACE, 24'hC001D0,
-+      24'hEADC0D, 24'hADD00D, 24'h0DEC0D, 24'hDCAFE,
-+      24'h3579BF, 24'h468ACE, 24'h579BDF, 24'h68ACED,
-+      24'h55AAAA, 24'h66BBBB, 24'h77CCCC, 24'h88DDDD,
-+      24'h99EEEE, 24'hAAFFFF, 24'hBBB111, 24'hCCC222,
-+      24'hDDD333, 24'hEEE444, 24'hFFF555, 24'h111222,
-+      24'h222333, 24'h333444, 24'h444555, 24'h555666,
-+      24'h666777, 24'h777888, 24'h888999, 24'h999AAA,
-+      24'hAAA111, 24'hBBB222, 24'hCCC333, 24'hDDD444,
-+      24'hEEE555, 24'hFFF666, 24'h2345AB, 24'hDC123,
-+      24'h4567CD, 24'h6789EF, 24'h89AB12, 24'hBCDEF3
-+   }, {
-+      24'h123456, 24'h234567, 24'h345678, 24'h456789,
-+      24'h56789A, 24'h6789AB, 24'h789ABC, 24'h89ABCD,
-+      24'h9ABCDE, 24'hABCDE0, 24'hBCDEF1, 24'hCDEF12,
-+      24'hDEF123, 24'hEF1234, 24'hF12345, 24'h012345,
-+      24'h111111, 24'h222222, 24'h333333, 24'h444444,
-+      24'h555555, 24'h666666, 24'h777777, 24'h888888,
-+      24'h999999, 24'hAAAAAA, 24'hBBBBBB, 24'hCCCCCC,
-+      24'hDDDDDD, 24'hEEEEEE, 24'hFFFFFF, 24'h000000,
-+      24'h13579B, 24'h2468AC, 24'h3579BD, 24'h468ACE,
-+      24'h579BDF, 24'h68ACEF, 24'h79BDF0, 24'h8ACE01,
-+      24'h9BDF12, 24'hACEF23, 24'hBDF034, 24'hCEF145,
-+      24'hDF0256, 24'hEF1367, 24'hF02478, 24'h012589,
-+      24'h12369A, 24'h2347AB, 24'h3458BC, 24'h4569CD,
-+      24'h567ADE, 24'h678BEF, 24'h789C01, 24'h89AD12,
-+      24'h9ABE23, 24'hABCF34, 24'hBC0145, 24'hCD1256,
-+      24'hDE2367, 24'hEF3478, 24'hF04589, 24'h01269A
-+   }, {
-+      24'hFACE01, 24'hDEAD02, 24'hBEEF03, 24'hCAFE04,
-+      24'hBABE05, 24'hFEED06, 24'hC0DE07, 24'hF00D08,
-+      24'h1CED09, 24'hBAD10A, 24'hC0010B, 24'hDAD10C,
-+      24'hACED0D, 24'hBA510E, 24'hD00D0F, 24'hFEED10,
-+      24'h111AAA, 24'h222BBB, 24'h333CCC, 24'h444DDD,
-+      24'h555EEE, 24'h666FFF, 24'h777000, 24'h888111,
-+      24'h999222, 24'hAAA333, 24'hBBB444, 24'hCCC555,
-+      24'hDDD666, 24'hEEE777, 24'hFFF888, 24'h000999,
-+      24'hAAAA01, 24'hBBBB02, 24'hCCCC03, 24'hDDDD04,
-+      24'hEEEE05, 24'hFFFF06, 24'h123407, 24'h234508,
-+      24'h345609, 24'h45670A, 24'h56780B, 24'h67890C,
-+      24'h789A0D, 24'h89AB0E, 24'h9ABC0F, 24'hABCD10,
-+      24'hBCDE11, 24'hCDEF12, 24'hDEF013, 24'hEF0114,
-+      24'hF01215, 24'h012316, 24'h123417, 24'h234518,
-+      24'h345619, 24'h45671A, 24'h56781B, 24'h67891C,
-+      24'h789A1D, 24'h89AB1E, 24'h9ABC1F, 24'hABCD20
-+   }, {
-+      24'h102938, 24'h293847, 24'h384756, 24'h475665,
-+      24'h566574, 24'h665483, 24'h754392, 24'h843A01,
-+      24'h932B10, 24'hA21C20, 24'hB10D30, 24'hC00E40,
-+      24'hDF0F50, 24'hEE1060, 24'hFD1170, 24'h0C1280,
-+      24'h1B1390, 24'h2A14A0, 24'h3915B0, 24'h4816C0,
-+      24'h5717D0, 24'h6618E0, 24'h7519F0, 24'h842A00,
-+      24'h933B10, 24'hA24C20, 24'hB15D30, 24'hC06E40,
-+      24'hD17F50, 24'hE29060, 24'hF3A170, 24'h04B280,
-+      24'h15C390, 24'h26D4A0, 24'h37E5B0, 24'h48F6C0,
-+      24'h5907D0, 24'h6A18E0, 24'h7B29F0, 24'h8C3A00,
-+      24'h9D4B10, 24'hAE5C20, 24'hBF6D30, 24'hD07E40,
-+      24'hE18F50, 24'hF2A060, 24'h03B170, 24'h14C280,
-+      24'h25D390, 24'h36E4A0, 24'h47F5B0, 24'h5806C0,
-+      24'h6917D0, 24'h7A28E0, 24'h8B39F0, 24'h9C4A00,
-+      24'hAD5B10, 24'hBE6C20, 24'hCF7D30, 24'hD08E40,
-+      24'hE19F50, 24'hF2B060, 24'h03C170, 24'h14D280
-+   }};
-+
-+
-+  cuckoo_hash #(
-+    .BUCKET_SIZE                        (BUCKET_SIZE),
-+    .NUM_FUNCTIONS                      (NUM_HASH_FUNCTIONS),
-+    .MAX_KICKS                          (4),
-+    .DATA_WIDTH                         (512),
-+    .HASH_MATRIX                        (HASH_MATRIX)
-+  ) cuckoo_hash_inst (
-+    .m_axi_araddr                       (axi_araddr),
-+    .m_axi_arburst                      (axi_arburst),
-+    .m_axi_arcache                      (axi_arcache),
-+    .m_axi_arid                         (axi_arid),
-+    .m_axi_arlen                        (axi_arlen),
-+    .m_axi_arlock                       (axi_arlock),
-+    .m_axi_arprot                       (axi_arprot),
-+    .m_axi_arready                      (axi_arready),
-+    .m_axi_arsize                       (axi_arsize),
-+    .m_axi_arvalid                      (axi_arvalid),
-+    .m_axi_awaddr                       (axi_awaddr),
-+    .m_axi_awburst                      (axi_awburst),
-+    .m_axi_awcache                      (axi_awcache),
-+    .m_axi_awid                         (axi_awid),
-+    .m_axi_awlen                        (axi_awlen),
-+    .m_axi_awlock                       (axi_awlock),
-+    .m_axi_awprot                       (axi_awprot),
-+    .m_axi_awready                      (axi_awready),
-+    .m_axi_awsize                       (axi_awsize),
-+    .m_axi_awvalid                      (axi_awvalid),
-+    .m_axi_bid                          (axi_bid),
-+    .m_axi_bready                       (axi_bready),
-+    .m_axi_bresp                        (axi_bresp),
-+    .m_axi_bvalid                       (axi_bvalid),
-+    .m_axi_rdata                        (axi_rdata),
-+    .m_axi_rid                          (axi_rid),
-+    .m_axi_rlast                        (axi_rlast),
-+    .m_axi_rready                       (axi_rready),
-+    .m_axi_rresp                        (axi_rresp),
-+    .m_axi_rvalid                       (axi_rvalid),
-+    .m_axi_wdata                        (axi_wdata),
-+    .m_axi_wlast                        (axi_wlast),
-+    .m_axi_wready                       (axi_wready),
-+    .m_axi_wstrb                        (axi_wstrb),
-+    .m_axi_wvalid                       (axi_wvalid),
-+
-+    .s_axis_tready                      (axis_engine_to_memory_tready),
-+    .s_axis_tdata                       (axis_engine_to_memory_tdata),
-+    .s_axis_tkeep                       (axis_engine_to_memory_tkeep),
-+    .s_axis_tlast                       (axis_engine_to_memory_tlast),
-+    .s_axis_tvalid                      (axis_engine_to_memory_tvalid),
-+    .metadata_in                        (mem_metadata_out),
-+    .metadata_in_valid                  (mem_metadata_out_valid),
-+
-+    .m_axis_tready                      (axis_memory_to_engine_tready),
-+    .m_axis_tdata                       (axis_memory_to_engine_tdata),
-+    .m_axis_tkeep                       (axis_memory_to_engine_tkeep),
-+    .m_axis_tlast                       (axis_memory_to_engine_tlast),
-+    .m_axis_tvalid                      (axis_memory_to_engine_tvalid),
-+    .metadata_out                       (mem_metadata_in),
-+    .metadata_out_valid                 (mem_metadata_in_valid),
-+
-+    .s_axis_dm_tvalid                   (axis_dm_read_tvalid),
-+    .s_axis_dm_tdata                    (axis_dm_read_tdata),
-+    .s_axis_dm_tkeep                    (axis_dm_read_tkeep),
-+    .s_axis_dm_tlast                    (axis_dm_read_tlast),
-+    .s_axis_dm_tready                   (axis_dm_read_tready),
-+
-+    .m_axis_dm_tvalid                   (axis_dm_write_tvalid),
-+    .m_axis_dm_tdata                    (axis_dm_write_tdata),
-+    .m_axis_dm_tkeep                    (axis_dm_write_tkeep),
-+    .m_axis_dm_tlast                    (axis_dm_write_tlast),
-+    .m_axis_dm_tready                   (axis_dm_write_tready),
-+
-+    .m_axis_dm_mm2s_cmd_tvalid          (axis_dm_read_cmd_tvalid),
-+    .m_axis_dm_mm2s_cmd_tdata           (axis_dm_read_cmd_tdata),
-+    .m_axis_dm_mm2s_cmd_tready          (axis_dm_read_cmd_tready),
-+
-+    .m_axis_dm_s2mm_cmd_tvalid          (axis_dm_write_cmd_tvalid),
-+    .m_axis_dm_s2mm_cmd_tdata           (axis_dm_write_cmd_tdata),
-+    .m_axis_dm_s2mm_cmd_tready          (axis_dm_write_cmd_tready),
-+
-+    .clk                                (axi_clk),
-+    .rstn                               (axi_rstn && apb_complete)
-+  );
-+
-+  assign axis_read_sts_tready  = 1'b1;
-+  assign axis_write_sts_tready = 1'b1;
-+
-+  logic vitis_net_p4_resetn;
-+  assign vitis_net_p4_resetn = axi_rstn && apb_complete;
-+
-+  packet_parser packet_parser_inst (
-+    .s_axis_tvalid           (s_axis_cmac_c2h_tvalid), 
-+    .s_axis_tdata            (s_axis_cmac_c2h_tdata), 
-+    .s_axis_tkeep            (s_axis_cmac_c2h_tkeep), 
-+    .s_axis_tlast            (s_axis_cmac_c2h_tlast),
-+    .s_axis_tuser            ({s_axis_cmac_c2h_tuser_size, s_axis_cmac_c2h_tuser_src, s_axis_cmac_c2h_tuser_dst}),
-+    .s_axis_tready           (s_axis_cmac_c2h_tready), 
-+    .user_metadata_in        (parser_metadata_in),
-+    .user_metadata_in_valid  (parser_metadata_in_valid),
-+
-+    .m_axis_tvalid           (axis_parser_to_filter_tvalid), 
-+    .m_axis_tdata            (axis_parser_to_filter_tdata), 
-+    .m_axis_tkeep            (axis_parser_to_filter_tkeep), 
-+    .m_axis_tlast            (axis_parser_to_filter_tlast),
-+    .m_axis_tuser            ({axis_parser_to_filter_tuser_size, axis_parser_to_filter_tuser_src, axis_parser_to_filter_tuser_dst}),
-+    .m_axis_tready           (axis_parser_to_filter_tready), 
-+    .user_metadata_out       (parser_metadata_out),
-+    .user_metadata_out_valid (parser_metadata_out_valid),
-+
-+    .s_axis_aclk             (axi_clk),
-+    .s_axis_aresetn          (vitis_net_p4_resetn)
-+  );
-+
-+  logic metadata_valid_in_toggle;
-+
-+  // Control the parser's metadata valid in signal
-+  always_ff @(posedge axi_clk) begin
-+    if(~axi_rstn) begin
-+      metadata_valid_in_toggle <= 1'b1;
-+    end
-+    else begin
-+      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && !s_axis_cmac_c2h_tlast) 
-+        metadata_valid_in_toggle <= 1'b0;  
-+      if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
-+        metadata_valid_in_toggle <= 1'b1;
-+    end
++  else begin
++    if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && !s_axis_cmac_c2h_tlast) 
++      parser_metadata_in_valid_toggle <= 1'b0;  
++    if (s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready && s_axis_cmac_c2h_tlast)
++      parser_metadata_in_valid_toggle <= 1'b1;
 +  end
++end
 +
-+  assign parser_metadata_in       = '0;
-+  assign parser_metadata_in_valid = metadata_valid_in_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
++// The filter signal from parser is stored until next value
++logic is_replication;
++logic is_replication_reg;
 +
-+  packet_deparser packet_deparser_inst (
-+    .s_axis_tvalid           (axis_engine_to_deparser_tvalid), 
-+    .s_axis_tdata            (axis_engine_to_deparser_tdata), 
-+    .s_axis_tkeep            (axis_engine_to_deparser_tkeep), 
-+    .s_axis_tlast            (axis_engine_to_deparser_tlast), 
-+    .s_axis_tready           (axis_engine_to_deparser_tready), 
-+    .user_metadata_in        ({engine_metadata_out, NODE_IPS[0], NODE_MACS[0]}),
-+    .user_metadata_in_valid  (engine_metadata_out_valid),
++assign axis_parser_to_filter_tdest = parser_metadata_valid ? is_replication : is_replication_reg;
 +
-+    .m_axis_tvalid           (axis_deparser_to_arbiter_tvalid), 
-+    .m_axis_tdata            (axis_deparser_to_arbiter_tdata), 
-+    .m_axis_tkeep            (axis_deparser_to_arbiter_tkeep), 
-+    .m_axis_tlast            (axis_deparser_to_arbiter_tlast), 
-+    .m_axis_tready           (axis_deparser_to_arbiter_tready), 
-+    .user_metadata_out       (),
-+    .user_metadata_out_valid (),
++always_ff @(posedge axi_clk) begin
++  if(~axi_rstn)
++    is_replication_reg <= 1'b0;
++  else if (parser_metadata_valid)
++    is_replication_reg <= is_replication;
++end
 +
-+    .s_axis_aclk             (axi_clk),
-+    .s_axis_aresetn          (vitis_net_p4_resetn)
-+  );
++replication_subsystem #(
++  .NUM_NODES                 (NUM_NODES),
++  .BUCKET_SIZE               (BUCKET_SIZE),
++  .NODE_IPS                  (NODE_IPS),
++  .NODE_MACS                 (NODE_MACS),
++  .HASH_MATRIX               (HASH_MATRIX)
++) replication_subsystem_inst (
++  .s_axis_tvalid             (axis_filter_to_replication_tvalid),
++  .s_axis_tdata              (axis_filter_to_replication_tdata),
++  .s_axis_tkeep              (axis_filter_to_replication_tkeep),
++  .s_axis_tlast              (axis_filter_to_replication_tlast),
++  .s_axis_tready             (axis_filter_to_replication_tready),
++  .metadata_in               (parser_metadata),
++  .metadata_in_valid         (parser_metadata_valid && is_replication),
++   
++  .m_axis_tvalid             (axis_replication_to_deparser_tvalid),
++  .m_axis_tdata              (axis_replication_to_deparser_tdata),
++  .m_axis_tkeep              (axis_replication_to_deparser_tkeep),
++  .m_axis_tlast              (axis_replication_to_deparser_tlast),
++  .m_axis_tready             (axis_replication_to_deparser_tready),
++  .metadata_out              (replication_metadata),
++  .metadata_out_valid        (replication_metadata_valid),
 +
-+  logic    [1:0] axis_filter_out_tvalid;
-+  logic [1023:0] axis_filter_out_tdata;
-+  logic  [127:0] axis_filter_out_tkeep;
-+  logic    [1:0] axis_filter_out_tlast;
-+  logic    [1:0] axis_filter_out_tdest;
-+  logic   [95:0] axis_filter_out_tuser;
-+  logic    [1:0] axis_filter_out_tready;
++  .s_axis_dm_tvalid          (axis_dm_read_tvalid),
++  .s_axis_dm_tdata           (axis_dm_read_tdata),
++  .s_axis_dm_tkeep           (axis_dm_read_tkeep),
++  .s_axis_dm_tlast           (axis_dm_read_tlast),
++  .s_axis_dm_tready          (axis_dm_read_tready),
 +
-+  packet_filter packet_filter_inst (
-+    .s_axis_tvalid           (axis_parser_to_filter_tvalid), 
-+    .s_axis_tdata            (axis_parser_to_filter_tdata),
-+    .s_axis_tkeep            (axis_parser_to_filter_tkeep),
-+    .s_axis_tlast            (axis_parser_to_filter_tlast),
-+    .s_axis_tuser            ({axis_parser_to_filter_tuser_size, axis_parser_to_filter_tuser_src, axis_parser_to_filter_tuser_dst}),
-+    .s_axis_tdest            (is_replication),
-+    .s_axis_tready           (axis_parser_to_filter_tready),
++  .m_axis_dm_tvalid          (axis_dm_write_tvalid),
++  .m_axis_dm_tdata           (axis_dm_write_tdata),
++  .m_axis_dm_tkeep           (axis_dm_write_tkeep),
++  .m_axis_dm_tlast           (axis_dm_write_tlast),
++  .m_axis_dm_tready          (axis_dm_write_tready),
 +
-+    .m_axis_tvalid           (axis_filter_out_tvalid),
-+    .m_axis_tdata            (axis_filter_out_tdata),
-+    .m_axis_tkeep            (axis_filter_out_tkeep),
-+    .m_axis_tlast            (axis_filter_out_tlast),
-+    .m_axis_tuser            (axis_filter_out_tuser),
-+    .m_axis_tdest            (),
-+    .m_axis_tready           (axis_filter_out_tready),
++  .m_axis_dm_mm2s_cmd_tvalid (axis_dm_read_cmd_tvalid),
++  .m_axis_dm_mm2s_cmd_tdata  (axis_dm_read_cmd_tdata),
++  .m_axis_dm_mm2s_cmd_tready (axis_dm_read_cmd_tready),
 +
-+    .aclk                    (axi_clk),
-+    .aresetn                 (axi_rstn)
-+  );
++  .m_axis_dm_s2mm_cmd_tvalid (axis_dm_write_cmd_tvalid),
++  .m_axis_dm_s2mm_cmd_tdata  (axis_dm_write_cmd_tdata),
++  .m_axis_dm_s2mm_cmd_tready (axis_dm_write_cmd_tready),
 +
-+  // Split the filter output between the QDMA and replication engine
-+  assign m_axis_qdma_c2h_tvalid       = axis_filter_out_tvalid[0];
-+  assign m_axis_qdma_c2h_tdata        = axis_filter_out_tdata[511:0];
-+  assign m_axis_qdma_c2h_tkeep        = axis_filter_out_tkeep[63:0];
-+  assign m_axis_qdma_c2h_tlast        = axis_filter_out_tlast[0];
-+  assign m_axis_qdma_c2h_tuser_size   = axis_filter_out_tuser[47-:16];
-+  assign m_axis_qdma_c2h_tuser_src    = axis_filter_out_tuser[31-:16];
-+  assign m_axis_qdma_c2h_tuser_dst    = axis_filter_out_tuser[15-:16];
-+  assign axis_filter_out_tready[0]    = m_axis_qdma_c2h_tready;
++  .m_axi_araddr              (axi_araddr),
++  .m_axi_arburst             (axi_arburst),
++  .m_axi_arid                (axi_arid),
++  .m_axi_arlen               (axi_arlen),
++  .m_axi_arready             (axi_arready),
++  .m_axi_arsize              (axi_arsize),
++  .m_axi_arvalid             (axi_arvalid),
++  .m_axi_awaddr              (axi_awaddr),
++  .m_axi_awburst             (axi_awburst),
++  .m_axi_awid                (axi_awid),
++  .m_axi_awlen               (axi_awlen),
++  .m_axi_awready             (axi_awready),
++  .m_axi_awsize              (axi_awsize),
++  .m_axi_awvalid             (axi_awvalid),
++  .m_axi_bid                 (axi_bid),
++  .m_axi_bready              (axi_bready),
++  .m_axi_bresp               (axi_bresp),
++  .m_axi_bvalid              (axi_bvalid),
++  .m_axi_rdata               (axi_rdata),
++  .m_axi_rid                 (axi_rid),
++  .m_axi_rlast               (axi_rlast),
++  .m_axi_rready              (axi_rready),
++  .m_axi_rresp               (axi_rresp),
++  .m_axi_rvalid              (axi_rvalid),
++  .m_axi_wdata               (axi_wdata),
++  .m_axi_wlast               (axi_wlast),
++  .m_axi_wready              (axi_wready),
++  .m_axi_wstrb               (axi_wstrb),
++  .m_axi_wvalid              (axi_wvalid),
 +
-+  assign axis_filter_to_engine_tvalid = axis_filter_out_tvalid[1];
-+  assign axis_filter_to_engine_tdata  = axis_filter_out_tdata[1023-:512];
-+  assign axis_filter_to_engine_tkeep  = axis_filter_out_tkeep[127-:64];
-+  assign axis_filter_to_engine_tlast  = axis_filter_out_tlast[1];
-+  assign axis_filter_out_tready[1]    = axis_filter_to_engine_tready;
++  .axi_clk                   (axi_clk),
++  .axi_rstn                  (rstn)
++);
 +
-+  logic [47:0] replication_tuser;
-+  logic [47:0] cmac_tuser;
-+  assign  replication_tuser          = {16'h0, 16'h0, 16'h0040};
-+  assign  m_axis_cmac_h2c_tuser_size = cmac_tuser[47-:16];
-+  assign  m_axis_cmac_h2c_tuser_src  = cmac_tuser[31-:16];
-+  assign  m_axis_cmac_h2c_tuser_dst  = cmac_tuser[15-:16];
++packet_parser packet_parser_inst (
++  .s_axis_tvalid           (s_axis_cmac_c2h_tvalid), 
++  .s_axis_tdata            (s_axis_cmac_c2h_tdata), 
++  .s_axis_tkeep            (s_axis_cmac_c2h_tkeep), 
++  .s_axis_tlast            (s_axis_cmac_c2h_tlast),
++  .s_axis_tuser            ({s_axis_cmac_c2h_tuser_size, s_axis_cmac_c2h_tuser_src, s_axis_cmac_c2h_tuser_dst}),
++  .s_axis_tready           (s_axis_cmac_c2h_tready), 
++  .user_metadata_in        ('0),
++  .user_metadata_in_valid  (parser_metadata_in_valid),
 +
-+  packet_arbiter packet_arbiter_inst (
-+    .s_axis_tvalid           ({axis_deparser_to_arbiter_tvalid, s_axis_qdma_h2c_tvalid}), 
-+    .s_axis_tdata            ({axis_deparser_to_arbiter_tdata, s_axis_qdma_h2c_tdata}),
-+    .s_axis_tkeep            ({axis_deparser_to_arbiter_tkeep, s_axis_qdma_h2c_tkeep}),
-+    .s_axis_tlast            ({axis_deparser_to_arbiter_tlast, s_axis_qdma_h2c_tlast}),
-+    .s_axis_tuser            ({replication_tuser, {s_axis_qdma_h2c_tuser_size, s_axis_qdma_h2c_tuser_src, s_axis_qdma_h2c_tuser_dst}}),
-+    .s_axis_tready           ({axis_deparser_to_arbiter_tready, s_axis_qdma_h2c_tready}),
++  .m_axis_tvalid           (axis_parser_to_filter_tvalid), 
++  .m_axis_tdata            (axis_parser_to_filter_tdata), 
++  .m_axis_tkeep            (axis_parser_to_filter_tkeep), 
++  .m_axis_tlast            (axis_parser_to_filter_tlast),
++  .m_axis_tuser            (axis_parser_to_filter_tuser),
++  .m_axis_tready           (axis_parser_to_filter_tready), 
++  .user_metadata_out       ({parser_metadata, is_replication}),
++  .user_metadata_out_valid (parser_metadata_valid),
 +
-+    .m_axis_tvalid           (m_axis_cmac_h2c_tvalid),
-+    .m_axis_tdata            (m_axis_cmac_h2c_tdata),
-+    .m_axis_tkeep            (m_axis_cmac_h2c_tkeep),
-+    .m_axis_tlast            (m_axis_cmac_h2c_tlast),
-+    .m_axis_tuser            (cmac_tuser),
-+    .m_axis_tready           (m_axis_cmac_h2c_tready),
++  .s_axis_aclk             (axi_clk),
++  .s_axis_aresetn          (rstn)
++);
 +
-+    .s_req_suppress          (2'b0),
-+    .aclk                    (axi_clk),
-+    .aresetn                 (axi_rstn)
-+  );
++packet_deparser packet_deparser_inst (
++  .s_axis_tvalid           (axis_replication_to_deparser_tvalid), 
++  .s_axis_tdata            (axis_replication_to_deparser_tdata), 
++  .s_axis_tkeep            (axis_replication_to_deparser_tkeep), 
++  .s_axis_tlast            (axis_replication_to_deparser_tlast), 
++  .s_axis_tready           (axis_replication_to_deparser_tready), 
++  .user_metadata_in        ({replication_metadata, NODE_IPS[0], NODE_MACS[0]}),
++  .user_metadata_in_valid  (replication_metadata_valid),
++
++  .m_axis_tvalid           (axis_deparser_to_arbiter_tvalid), 
++  .m_axis_tdata            (axis_deparser_to_arbiter_tdata), 
++  .m_axis_tkeep            (axis_deparser_to_arbiter_tkeep), 
++  .m_axis_tlast            (axis_deparser_to_arbiter_tlast), 
++  .m_axis_tready           (axis_deparser_to_arbiter_tready), 
++  .user_metadata_out       (),
++  .user_metadata_out_valid (),
++
++  .s_axis_aclk             (axi_clk),
++  .s_axis_aresetn          (rstn)
++);
++
++packet_filter packet_filter_inst (
++  .s_axis_tvalid           (axis_parser_to_filter_tvalid), 
++  .s_axis_tdata            (axis_parser_to_filter_tdata),
++  .s_axis_tkeep            (axis_parser_to_filter_tkeep),
++  .s_axis_tlast            (axis_parser_to_filter_tlast),
++  .s_axis_tuser            (axis_parser_to_filter_tuser),
++  .s_axis_tdest            (axis_parser_to_filter_tdest),
++  .s_axis_tready           (axis_parser_to_filter_tready),
++
++  .m_axis_tvalid           ({axis_filter_to_replication_tvalid, m_axis_qdma_c2h_tvalid}),
++  .m_axis_tdata            ({axis_filter_to_replication_tdata, m_axis_qdma_c2h_tdata}),
++  .m_axis_tkeep            ({axis_filter_to_replication_tkeep, m_axis_qdma_c2h_tkeep}),
++  .m_axis_tlast            ({axis_filter_to_replication_tlast, m_axis_qdma_c2h_tlast}),
++  .m_axis_tuser            ({axis_filter_to_replication_tuser, {m_axis_qdma_c2h_tuser_size, m_axis_qdma_c2h_tuser_src,m_axis_qdma_c2h_tuser_dst}}),
++  .m_axis_tdest            (),
++  .m_axis_tready           ({axis_filter_to_replication_tready, m_axis_qdma_c2h_tready}),
++
++  .aclk                    (axi_clk),
++  .aresetn                 (rstn)
++);
++
++packet_arbiter packet_arbiter_inst (
++  .s_axis_tvalid           ({axis_deparser_to_arbiter_tvalid, s_axis_qdma_h2c_tvalid}), 
++  .s_axis_tdata            ({axis_deparser_to_arbiter_tdata, s_axis_qdma_h2c_tdata}),
++  .s_axis_tkeep            ({axis_deparser_to_arbiter_tkeep, s_axis_qdma_h2c_tkeep}),
++  .s_axis_tlast            ({axis_deparser_to_arbiter_tlast, s_axis_qdma_h2c_tlast}),
++  .s_axis_tuser            ({{16'h0, 16'h0, 16'h0040}, {s_axis_qdma_h2c_tuser_size, s_axis_qdma_h2c_tuser_src, s_axis_qdma_h2c_tuser_dst}}),
++  .s_axis_tready           ({axis_deparser_to_arbiter_tready, s_axis_qdma_h2c_tready}),
++
++  .m_axis_tvalid           (m_axis_cmac_h2c_tvalid),
++  .m_axis_tdata            (m_axis_cmac_h2c_tdata),
++  .m_axis_tkeep            (m_axis_cmac_h2c_tkeep),
++  .m_axis_tlast            (m_axis_cmac_h2c_tlast),
++  .m_axis_tuser            ({m_axis_cmac_h2c_tuser_size, m_axis_cmac_h2c_tuser_src, m_axis_cmac_h2c_tuser_dst}),
++  .m_axis_tready           (m_axis_cmac_h2c_tready),
++
++  .s_req_suppress          (2'b0),
++  .aclk                    (axi_clk),
++  .aresetn                 (rstn)
++);
++
++hbm_bd_wrapper hbm_inst (
++  .s_axi_hbm_araddr                (s_axi_araddr),
++  .s_axi_hbm_arburst               (s_axi_arburst),
++  .s_axi_hbm_arcache               (s_axi_arcache),
++  .s_axi_hbm_arid                  (s_axi_arid),
++  .s_axi_hbm_arlen                 (s_axi_arlen),
++  .s_axi_hbm_arlock                (s_axi_arlock),
++  .s_axi_hbm_arprot                (s_axi_arprot),
++  .s_axi_hbm_arqos                 (s_axi_arqos),
++  .s_axi_hbm_arready               (s_axi_arready),
++  .s_axi_hbm_arsize                (s_axi_arsize),
++  .s_axi_hbm_aruser                (s_axi_aruser),
++  .s_axi_hbm_arvalid               (s_axi_arvalid),
++  .s_axi_hbm_awaddr                (s_axi_awaddr),
++  .s_axi_hbm_awburst               (s_axi_awburst),
++  .s_axi_hbm_awcache               (s_axi_awcache),
++  .s_axi_hbm_awid                  (s_axi_awid),
++  .s_axi_hbm_awlen                 (s_axi_awlen),
++  .s_axi_hbm_awlock                (s_axi_awlock),
++  .s_axi_hbm_awprot                (s_axi_awprot),
++  .s_axi_hbm_awqos                 (s_axi_awqos),
++  .s_axi_hbm_awready               (s_axi_awready),
++  .s_axi_hbm_awsize                (s_axi_awsize),
++  .s_axi_hbm_awuser                (s_axi_awuser),
++  .s_axi_hbm_awvalid               (s_axi_awvalid),
++  .s_axi_hbm_bid                   (s_axi_bid),
++  .s_axi_hbm_bready                (s_axi_bready),
++  .s_axi_hbm_bresp                 (s_axi_bresp),
++  .s_axi_hbm_bvalid                (s_axi_bvalid),
++  .s_axi_hbm_rdata                 (s_axi_rdata),
++  .s_axi_hbm_rid                   (s_axi_rid),
++  .s_axi_hbm_rlast                 (s_axi_rlast),
++  .s_axi_hbm_rready                (s_axi_rready),
++  .s_axi_hbm_rresp                 (s_axi_rresp),
++  .s_axi_hbm_rvalid                (s_axi_rvalid),
++  .s_axi_hbm_wdata                 (s_axi_wdata),
++  .s_axi_hbm_wlast                 (s_axi_wlast),
++  .s_axi_hbm_wready                (s_axi_wready),
++  .s_axi_hbm_wstrb                 (s_axi_wstrb),
++  .s_axi_hbm_wuser                 (s_axi_wuser),
++  .s_axi_hbm_wvalid                (s_axi_wvalid),
++
++  .s_axi_0_araddr                  (axi_araddr[0]),
++  .s_axi_0_arburst                 (axi_arburst[0]),
++  .s_axi_0_arid                    (axi_arid[0]),
++  .s_axi_0_arlen                   (axi_arlen[0]),
++  .s_axi_0_arready                 (axi_arready[0]),
++  .s_axi_0_arsize                  (axi_arsize[0]),
++  .s_axi_0_arvalid                 (axi_arvalid[0]),
++  .s_axi_0_awaddr                  (axi_awaddr[0]),
++  .s_axi_0_awburst                 (axi_awburst[0]),
++  .s_axi_0_awid                    (axi_awid[0]),
++  .s_axi_0_awlen                   (axi_awlen[0]),
++  .s_axi_0_awready                 (axi_awready[0]),
++  .s_axi_0_awsize                  (axi_awsize[0]),
++  .s_axi_0_awvalid                 (axi_awvalid[0]),
++  .s_axi_0_bid                     (axi_bid[0]),
++  .s_axi_0_bready                  (axi_bready[0]),
++  .s_axi_0_bresp                   (axi_bresp[0]),
++  .s_axi_0_bvalid                  (axi_bvalid[0]),
++  .s_axi_0_rdata                   (axi_rdata[0]),
++  .s_axi_0_rid                     (axi_rid[0]),
++  .s_axi_0_rlast                   (axi_rlast[0]),
++  .s_axi_0_rready                  (axi_rready[0]),
++  .s_axi_0_rresp                   (axi_rresp[0]),
++  .s_axi_0_rvalid                  (axi_rvalid[0]),
++  .s_axi_0_wdata                   (axi_wdata[0]),
++  .s_axi_0_wlast                   (axi_wlast[0]),
++  .s_axi_0_wready                  (axi_wready[0]),
++  .s_axi_0_wstrb                   (axi_wstrb[0]),
++  .s_axi_0_wvalid                  (axi_wvalid[0]),
++
++  .s_axi_1_araddr                  (axi_araddr[1]),
++  .s_axi_1_arburst                 (axi_arburst[1]),
++  .s_axi_1_arid                    (axi_arid[1]),
++  .s_axi_1_arlen                   (axi_arlen[1]),
++  .s_axi_1_arready                 (axi_arready[1]),
++  .s_axi_1_arsize                  (axi_arsize[1]),
++  .s_axi_1_arvalid                 (axi_arvalid[1]),
++  .s_axi_1_awaddr                  (axi_awaddr[1]),
++  .s_axi_1_awburst                 (axi_awburst[1]),
++  .s_axi_1_awid                    (axi_awid[1]),
++  .s_axi_1_awlen                   (axi_awlen[1]),
++  .s_axi_1_awready                 (axi_awready[1]),
++  .s_axi_1_awsize                  (axi_awsize[1]),
++  .s_axi_1_awvalid                 (axi_awvalid[1]),
++  .s_axi_1_bid                     (axi_bid[1]),
++  .s_axi_1_bready                  (axi_bready[1]),
++  .s_axi_1_bresp                   (axi_bresp[1]),
++  .s_axi_1_bvalid                  (axi_bvalid[1]),
++  .s_axi_1_rdata                   (axi_rdata[1]),
++  .s_axi_1_rid                     (axi_rid[1]),
++  .s_axi_1_rlast                   (axi_rlast[1]),
++  .s_axi_1_rready                  (axi_rready[1]),
++  .s_axi_1_rresp                   (axi_rresp[1]),
++  .s_axi_1_rvalid                  (axi_rvalid[1]),
++  .s_axi_1_wdata                   (axi_wdata[1]),
++  .s_axi_1_wlast                   (axi_wlast[1]),
++  .s_axi_1_wready                  (axi_wready[1]),
++  .s_axi_1_wstrb                   (axi_wstrb[1]),
++  .s_axi_1_wvalid                  (axi_wvalid[1]),
++
++  .s_axi_2_araddr                  (axi_araddr[2]),
++  .s_axi_2_arburst                 (axi_arburst[2]),
++  .s_axi_2_arid                    (axi_arid[2]),
++  .s_axi_2_arlen                   (axi_arlen[2]),
++  .s_axi_2_arready                 (axi_arready[2]),
++  .s_axi_2_arsize                  (axi_arsize[2]),
++  .s_axi_2_arvalid                 (axi_arvalid[2]),
++  .s_axi_2_awaddr                  (axi_awaddr[2]),
++  .s_axi_2_awburst                 (axi_awburst[2]),
++  .s_axi_2_awid                    (axi_awid[2]),
++  .s_axi_2_awlen                   (axi_awlen[2]),
++  .s_axi_2_awready                 (axi_awready[2]),
++  .s_axi_2_awsize                  (axi_awsize[2]),
++  .s_axi_2_awvalid                 (axi_awvalid[2]),
++  .s_axi_2_bid                     (axi_bid[2]),
++  .s_axi_2_bready                  (axi_bready[2]),
++  .s_axi_2_bresp                   (axi_bresp[2]),
++  .s_axi_2_bvalid                  (axi_bvalid[2]),
++  .s_axi_2_rdata                   (axi_rdata[2]),
++  .s_axi_2_rid                     (axi_rid[2]),
++  .s_axi_2_rlast                   (axi_rlast[2]),
++  .s_axi_2_rready                  (axi_rready[2]),
++  .s_axi_2_rresp                   (axi_rresp[2]),
++  .s_axi_2_rvalid                  (axi_rvalid[2]),
++  .s_axi_2_wdata                   (axi_wdata[2]),
++  .s_axi_2_wlast                   (axi_wlast[2]),
++  .s_axi_2_wready                  (axi_wready[2]),
++  .s_axi_2_wstrb                   (axi_wstrb[2]),
++  .s_axi_2_wvalid                  (axi_wvalid[2]),
++
++  .s_axi_3_araddr                  (axi_araddr[3]),
++  .s_axi_3_arburst                 (axi_arburst[3]),
++  .s_axi_3_arid                    (axi_arid[3]),
++  .s_axi_3_arlen                   (axi_arlen[3]),
++  .s_axi_3_arready                 (axi_arready[3]),
++  .s_axi_3_arsize                  (axi_arsize[3]),
++  .s_axi_3_arvalid                 (axi_arvalid[3]),
++  .s_axi_3_awaddr                  (axi_awaddr[3]),
++  .s_axi_3_awburst                 (axi_awburst[3]),
++  .s_axi_3_awid                    (axi_awid[3]),
++  .s_axi_3_awlen                   (axi_awlen[3]),
++  .s_axi_3_awready                 (axi_awready[3]),
++  .s_axi_3_awsize                  (axi_awsize[3]),
++  .s_axi_3_awvalid                 (axi_awvalid[3]),
++  .s_axi_3_bid                     (axi_bid[3]),
++  .s_axi_3_bready                  (axi_bready[3]),
++  .s_axi_3_bresp                   (axi_bresp[3]),
++  .s_axi_3_bvalid                  (axi_bvalid[3]),
++  .s_axi_3_rdata                   (axi_rdata[3]),
++  .s_axi_3_rid                     (axi_rid[3]),
++  .s_axi_3_rlast                   (axi_rlast[3]),
++  .s_axi_3_rready                  (axi_rready[3]),
++  .s_axi_3_rresp                   (axi_rresp[3]),
++  .s_axi_3_rvalid                  (axi_rvalid[3]),
++  .s_axi_3_wdata                   (axi_wdata[3]),
++  .s_axi_3_wlast                   (axi_wlast[3]),
++  .s_axi_3_wready                  (axi_wready[3]),
++  .s_axi_3_wstrb                   (axi_wstrb[3]),
++  .s_axi_3_wvalid                  (axi_wvalid[3]),
++
++  .s_axis_dm_s2mm_tvalid           (axis_dm_write_tvalid),
++  .s_axis_dm_s2mm_tdata            (axis_dm_write_tdata),
++  .s_axis_dm_s2mm_tkeep            (axis_dm_write_tkeep),
++  .s_axis_dm_s2mm_tlast            (axis_dm_write_tlast),
++  .s_axis_dm_s2mm_tready           (axis_dm_write_tready),
++
++  .m_axis_dm_mm2s_tvalid           (axis_dm_read_tvalid),
++  .m_axis_dm_mm2s_tdata            (axis_dm_read_tdata),
++  .m_axis_dm_mm2s_tkeep            (axis_dm_read_tkeep),
++  .m_axis_dm_mm2s_tlast            (axis_dm_read_tlast),
++  .m_axis_dm_mm2s_tready           (axis_dm_read_tready),
++
++  .s_axis_dm_s2mm_cmd_tvalid       (axis_dm_write_cmd_tvalid),
++  .s_axis_dm_s2mm_cmd_tdata        (axis_dm_write_cmd_tdata),
++  .s_axis_dm_s2mm_cmd_tready       (axis_dm_write_cmd_tready),
++
++  .s_axis_dm_mm2s_cmd_tvalid       (axis_dm_read_cmd_tvalid),
++  .s_axis_dm_mm2s_cmd_tdata        (axis_dm_read_cmd_tdata),
++  .s_axis_dm_mm2s_cmd_tready       (axis_dm_read_cmd_tready),
++
++  .m_axis_dm_s2mm_status_tdata     (axis_dm_write_sts_tdata),
++  .m_axis_dm_s2mm_status_tkeep     (axis_dm_write_sts_tkeep),
++  .m_axis_dm_s2mm_status_tlast     (axis_dm_write_sts_tlast),
++  .m_axis_dm_s2mm_status_tvalid    (axis_dm_write_sts_tvalid),
++  .m_axis_dm_s2mm_status_tready    (axis_dm_write_sts_tready),
++
++  .m_axis_dm_mm2s_status_tdata     (axis_dm_read_sts_tdata),
++  .m_axis_dm_mm2s_status_tkeep     (axis_dm_read_sts_tkeep),
++  .m_axis_dm_mm2s_status_tlast     (axis_dm_read_sts_tlast),
++  .m_axis_dm_mm2s_status_tvalid    (axis_dm_read_sts_tvalid),
++  .m_axis_dm_mm2s_status_tready    (axis_dm_read_sts_tready),
++
++  .apb_complete_0                  (apb_complete_0),
++  .apb_complete_1                  (),
++  .axi_clk                         (axi_clk),
++  .axi_resetn                      (axi_rstn),
++  .hbm_ref_clk                     (hbm_ref_clk)
++);
 +
 +endmodule
 \ No newline at end of file
@@ -2889,37 +3134,48 @@ index 0000000..291d34f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/metadata.sv b/src/hbm_subsystem/metadata.sv
 new file mode 100644
-index 0000000..dce6857
+index 0000000..de2bfb7
 --- /dev/null
 +++ b/src/hbm_subsystem/metadata.sv
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,31 @@
 +package metadata_pkg;
-+  parameter KEY_WIDTH = 64;
 +
-+  typedef enum logic [7:0] {
-+    READ,
-+    WRITE,
-+    READ_RESULT,
-+    WRITE_ACK,
-+    WRITE_ACK_LEADER
-+  } opcode_t;
++parameter int KEY_WIDTH = 64;
++parameter logic [31:0] DIRTY_TAG = {<< 8 {32'hF0CACC1A}};
 +
-+  typedef struct packed {
-+    logic          [31:0] ip;      // IPv4 address of the sender
-+    logic          [47:0] mac;     // Mac address of the sender
-+    logic           [7:0] opcode;  // Operation identifier used to distinguish consecutive writes
-+    logic           [7:0] id;      // Operation code
-+    logic [KEY_WIDTH-1:0] key;
-+  } st_metadata;
++typedef enum logic [7:0] {
++  READ              = 8'h00,
++  WRITE             = 8'h01,
++  READ_RESULT       = 8'h02,
++  READ_NOT_FOUND    = 8'h03,
++  WRITE_ACK         = 8'h04,
++  WRITE_ACK_LEADER  = 8'h05,
++  HEARTBEAT         = 8'h06,
++  HEARTBEAT_ACK     = 8'h07,
++  VOTE_REQUEST      = 8'h08,
++  VOTE              = 8'h09,
++  SWAP_READ         = 8'h0A,
++  SWAP_WRITE        = 8'h0B
++} opcode_e;
++
++typedef struct packed {
++  logic          [31:0] ip;     
++  logic          [47:0] mac;    
++  opcode_e              opcode; 
++  logic           [7:0] index;     
++  logic [KEY_WIDTH-1:0] key;
++} st_metadata;
++
++parameter int METADATA_WIDTH = $bits(st_metadata);
 +
 +endpackage
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/packet_deparser.p4 b/src/hbm_subsystem/packet_deparser.p4
 new file mode 100644
-index 0000000..3bd8a8d
+index 0000000..ba7b1f6
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_deparser.p4
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,259 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -2940,13 +3196,22 @@ index 0000000..3bd8a8d
 +const bit<16> REP_HEADER_SIZE  = 2;
 +const bit<16> KEY_SIZE         = 8;
 +const bit<16> PAYLOAD_SIZE     = 1024 - 4 - 8;
++const bit<16> MINIMUM_SIZE     = 60 - IP_HEADER_SIZE - UDP_HEADER_SIZE - REP_HEADER_SIZE;
 +
-+// Operations in rep header
-+const bit<8> READ               = 0x00;
-+const bit<8> WRITE              = 0x01;
-+const bit<8> READ_RESULT        = 0x02;
-+const bit<8> WRITE_ACK          = 0x03;
-+const bit<8> WRITE_ACK_LEADER   = 0x04;
++// Replication opcodes
++const bit<8> READ              = 0x00;
++const bit<8> WRITE             = 0x01;
++const bit<8> READ_RESULT       = 0x02;
++const bit<8> READ_NOT_FOUND    = 0x03;
++const bit<8> WRITE_ACK         = 0x04;
++const bit<8> WRITE_ACK_LEADER  = 0x05;
++
++const bit<8> HEARTBEAT         = 0x06;
++const bit<8> HEARTBEAT_ACK     = 0x07;
++const bit<8> VOTE_REQUEST      = 0x08;
++const bit<8> VOTE              = 0x09;
++
++const bit<32> DIRTY_TAG        = 0xF0CACC1A;
 +
 +// ********************************************************************** //
 +// *************************** H E A D E R S  *************************** //
@@ -3008,10 +3273,14 @@ index 0000000..3bd8a8d
 +  bit<16> checksum;  // UDP checksum
 +}
 +
-+/* Replication header */
++// Replication header
 +header rep_h {
 +  bit<8>  opcode;
 +  bit<8>  id;
++}
++
++header tag_h {
++  bit<32> tag;
 +}
 +
 +header key_h {
@@ -3022,7 +3291,7 @@ index 0000000..3bd8a8d
 +// ************************* S T R U C T U R E S  *********************** //
 +// ********************************************************************** //
 +
-+// header structure
++// Header structure
 +struct headers {
 +  eth_mac_t  eth;
 +  vlan_t     new_vlan;
@@ -3033,6 +3302,7 @@ index 0000000..3bd8a8d
 +  tcp_opt_t  tcpopt;
 +  udp_t      udp;
 +  rep_h      rep;
++  tag_h      tag;
 +  key_h      key;
 +}
 +
@@ -3064,6 +3334,19 @@ index 0000000..3bd8a8d
 +                inout standard_metadata_t smeta) {
 +
 +  state start {
++    transition parse_tag;
++  }
++
++  state parse_tag {
++    packet.extract(hdr.tag);
++    transition select(hdr.tag.tag) {
++      DIRTY_TAG : parse_key;
++      default   : accept;
++    }
++  }
++
++  state parse_key {
++    packet.extract(hdr.key);
 +    transition accept;
 +  }
 +}
@@ -3075,67 +3358,53 @@ index 0000000..3bd8a8d
 +control MyProcessing(inout headers hdr,
 +                     inout metadata_t meta,
 +                     inout standard_metadata_t smeta) {
-+  InternetChecksum() ck;
-+  bit<16> ip_length;
-+  bit<16> udp_length;
-+  bit<16> csum;
++  // InternetChecksum() ck;
++  // bit<16> csum;
++
++  bit<16> payload_length;
 +
 +  apply {
-+    if (meta.opcode == WRITE) {
-+      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE + PAYLOAD_SIZE;
-+      ip_length = IP_HEADER_SIZE + udp_length;
-+      hdr.key.setInvalid();
-+    } else if (meta.opcode == READ_RESULT) {
-+      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE + PAYLOAD_SIZE;
-+      ip_length = IP_HEADER_SIZE + udp_length;
-+      hdr.key.setInvalid();
-+    } else if (meta.opcode == WRITE_ACK || meta.opcode == WRITE_ACK_LEADER) {
-+      // padding to reach minimum size
-+      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE + 12;  
-+      ip_length = IP_HEADER_SIZE + udp_length;
-+      hdr.key.setValid();
-+    } else {
-+      udp_length = UDP_HEADER_SIZE + REP_HEADER_SIZE + KEY_SIZE;
-+      ip_length = IP_HEADER_SIZE + udp_length;
-+      hdr.key.setValid();
-+    }
-+
 +    hdr.eth.setValid();
 +    hdr.ipv4.setValid();
 +    hdr.udp.setValid();
 +    hdr.rep.setValid();
++    hdr.key.setValid();
 +
-+    hdr.eth.dmac            = meta.mac_src;
-+    hdr.eth.smac            = meta.mac_own;
-+    hdr.eth.type            = IPV4_TYPE;
++    payload_length = MINIMUM_SIZE;
++    if (meta.opcode == WRITE || meta.opcode == READ_RESULT) {
++      payload_length = PAYLOAD_SIZE;
++    }
 +
-+    hdr.ipv4.version        = 4;
-+    hdr.ipv4.hdr_len        = 5;
-+    hdr.ipv4.tos            = 0;
-+    hdr.ipv4.length         = ip_length;
-+    hdr.ipv4.id             = 0;
-+    hdr.ipv4.flags          = 0;
-+    hdr.ipv4.offset         = 0;
-+    hdr.ipv4.ttl            = 64;
-+    hdr.ipv4.protocol       = UDP_PROT;
-+    hdr.ipv4.hdr_chk        = 0;  // Calculated below
-+    hdr.ipv4.src            = meta.ip_own;
-+    hdr.ipv4.dst            = meta.ip_src;
++    hdr.eth.dmac     = meta.mac_src;
++    hdr.eth.smac     = meta.mac_own;
++    hdr.eth.type     = IPV4_TYPE;
 +
-+    hdr.udp.src_port        = REPLICATION_PORT;
-+    hdr.udp.dst_port        = REPLICATION_PORT;
-+    hdr.udp.length          = udp_length;
-+    hdr.udp.checksum        = 0;
++    hdr.ipv4.version = 4;
++    hdr.ipv4.hdr_len = 5;
++    hdr.ipv4.tos     = 0;
++    hdr.ipv4.length  = IP_HEADER_SIZE + UDP_HEADER_SIZE + REP_HEADER_SIZE + payload_length;
++    hdr.ipv4.id      = 0;
++    hdr.ipv4.flags   = 0;
++    hdr.ipv4.offset  = 0;
++    hdr.ipv4.ttl     = 64;
++    hdr.ipv4.protocol= UDP_PROT;
++    hdr.ipv4.hdr_chk = 0;
++    hdr.ipv4.src     = meta.ip_own;
++    hdr.ipv4.dst     = meta.ip_src;
 +
-+    hdr.rep.opcode          = meta.opcode;
-+    hdr.rep.id              = meta.index;
-+    hdr.key.key             = meta.key;
++    hdr.udp.src_port = REPLICATION_PORT;
++    hdr.udp.dst_port = REPLICATION_PORT;
++    hdr.udp.length   = UDP_HEADER_SIZE + REP_HEADER_SIZE + payload_length;
++    hdr.udp.checksum = 0;
 +
-+    ck.clear();
-+    ck.add({hdr.ipv4.version, hdr.ipv4.hdr_len, hdr.ipv4.tos, hdr.ipv4.length, hdr.ipv4.id, hdr.ipv4.flags, hdr.ipv4.offset});
-+    ck.add({hdr.ipv4.ttl, hdr.ipv4.protocol, hdr.ipv4.src, hdr.ipv4.dst});
-+    ck.get(csum);
-+    hdr.ipv4.hdr_chk = csum;
++    hdr.rep.opcode   = meta.opcode;
++    hdr.rep.id       = meta.index;
++    hdr.key.key      = meta.key;
++
++    // ck.clear();
++    // ck.add({hdr.ipv4.version, hdr.ipv4.hdr_len, hdr.ipv4.tos, hdr.ipv4.length, hdr.ipv4.id, hdr.ipv4.flags, hdr.ipv4.offset, hdr.ipv4.ttl, hdr.ipv4.protocol, hdr.ipv4.src, hdr.ipv4.dst});
++    // ck.get(csum);
++    // hdr.ipv4.hdr_chk = csum;
 +  }
 +}
 +
@@ -3168,10 +3437,10 @@ index 0000000..3bd8a8d
 +) main;
 diff --git a/src/hbm_subsystem/packet_parser.p4 b/src/hbm_subsystem/packet_parser.p4
 new file mode 100644
-index 0000000..bfe00ae
+index 0000000..0c9b444
 --- /dev/null
 +++ b/src/hbm_subsystem/packet_parser.p4
-@@ -0,0 +1,283 @@
+@@ -0,0 +1,301 @@
 +#include <core.p4>
 +#include <xsa.p4>
 +
@@ -3187,12 +3456,20 @@ index 0000000..bfe00ae
 +
 +const bit<16> REPLICATION_PORT = 0x7777;
 +
-+// Operations in rep header
-+const bit<8> READ               = 0x00;
-+const bit<8> WRITE              = 0x01;
-+const bit<8> READ_RESULT        = 0x02;
-+const bit<8> WRITE_ACK          = 0x03;
-+const bit<8> WRITE_ACK_LEADER   = 0x04;
++// Replication opcodes
++const bit<8> READ              = 0x00;
++const bit<8> WRITE             = 0x01;
++const bit<8> READ_RESULT       = 0x02;
++const bit<8> READ_NOT_FOUND    = 0x03;
++const bit<8> WRITE_ACK         = 0x04;
++const bit<8> WRITE_ACK_LEADER  = 0x05;
++
++const bit<8> HEARTBEAT         = 0x06;
++const bit<8> HEARTBEAT_ACK     = 0x07;
++const bit<8> VOTE_REQUEST      = 0x08;
++const bit<8> VOTE              = 0x09;
++
++const bit<32> DIRTY_TAG        = 0xF0CACC1A;
 +
 +// ********************************************************************** //
 +// *************************** H E A D E R S  *************************** //
@@ -3254,10 +3531,14 @@ index 0000000..bfe00ae
 +  bit<16> checksum;  // UDP checksum
 +}
 +
-+/* Replication header */
++// Replication header
 +header rep_h {
 +  bit<8>  opcode;
 +  bit<8>  id;
++}
++
++header tag_h {
++  bit<32> tag;
 +}
 +
 +header key_h {
@@ -3279,6 +3560,7 @@ index 0000000..bfe00ae
 +  tcp_opt_t  tcpopt;
 +  udp_t      udp;
 +  rep_h      rep;
++  tag_h      tag;
 +  key_h      key;
 +}
 +
@@ -3363,7 +3645,12 @@ index 0000000..bfe00ae
 +
 +  state parse_rep {
 +    packet.extract(hdr.rep);
-+    transition parse_key;
++    transition select(hdr.rep.opcode) {
++      READ_RESULT      : accept;
++      READ_NOT_FOUND   : accept;
++      WRITE_ACK_LEADER : accept;
++      default          : parse_key;
++    }
 +  }
 +
 +  state parse_key {
@@ -3395,23 +3682,22 @@ index 0000000..bfe00ae
 +    key     = (bit<64>) 0;
 +    is_rep  = (bit<1>) 0;
 +
-+    if (hdr.eth.isValid() && hdr.ipv4.isValid() && hdr.udp.isValid() && hdr.rep.isValid() && hdr.key.isValid()) {
-+      if (hdr.udp.dst_port == 0x7777 && hdr.rep.opcode != READ_RESULT && hdr.rep.opcode != WRITE_ACK_LEADER) {
-+        ip_src  = hdr.ipv4.src;
-+        mac_src = hdr.eth.smac;
-+        opcode  = hdr.rep.opcode;
-+        index   = hdr.rep.id;
-+        key     = hdr.key.key;
-+        is_rep  = (bit<1>) 1;
++    if (hdr.key.isValid()) {
++      ip_src     = hdr.ipv4.src;
++      mac_src    = hdr.eth.smac;
++      opcode     = hdr.rep.opcode;
++      index      = hdr.rep.id;
++      key        = hdr.key.key;
++      is_rep     = 1;
++      smeta.drop = 1;
 +
-+        if (hdr.rep.opcode == WRITE) {
-+          hdr.eth.setInvalid();
-+          hdr.ipv4.setInvalid();
-+          hdr.udp.setInvalid();
-+          hdr.rep.setInvalid();
-+        } else {
-+          smeta.drop = 1;
-+        }
++      if (hdr.rep.opcode == WRITE) {
++        hdr.eth.setInvalid();
++        hdr.ipv4.setInvalid();
++        hdr.udp.setInvalid();
++        hdr.rep.setInvalid();
++        hdr.tag.setValid();
++        smeta.drop = 0;
 +      }
 +    }
 +
@@ -3442,6 +3728,7 @@ index 0000000..bfe00ae
 +    packet.emit(hdr.tcpopt);
 +    packet.emit(hdr.udp);
 +    packet.emit(hdr.rep);
++    packet.emit(hdr.tag);
 +    packet.emit(hdr.key);
 +  }
 +}
@@ -3457,10 +3744,10 @@ index 0000000..bfe00ae
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..1dce193
+index 0000000..3506d8b
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
-@@ -0,0 +1,623 @@
+@@ -0,0 +1,634 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*;
@@ -3519,7 +3806,6 @@ index 0000000..1dce193
 +localparam FIFO_DEPTH     = 128;
 +localparam FIFO_PTR_WIDTH = $clog2(FIFO_DEPTH);
 +localparam NODE_PTR_WIDTH = $clog2(NUM_NODES);
-+localparam METADATA_WIDTH = $bits(st_metadata);
 +
 +typedef enum logic [1:0] {
 +  ACCEPT_NET,
@@ -3581,7 +3867,7 @@ index 0000000..1dce193
 +// Signals for keeping track of replicas' write acks
 +typedef struct packed {
 +  st_metadata                meta;
-+  logic [FIFO_PTR_WIDTH-1:0] id;
++  logic [FIFO_PTR_WIDTH-1:0] index;
 +  logic               [31:0] count;
 +  logic                      is_running;
 +} st_ack;
@@ -3607,6 +3893,9 @@ index 0000000..1dce193
 +// Keeps track of which side is using the output interface: 10 incoming packets, 01 memory controller
 +logic [1:0] out_busy, out_busy_next;
 +
++// Adds dirty tag to write in memory
++logic tag_written, tag_written_next;
++
 +// Checks whether the node is the leader for given key
 +function logic is_leader (input logic [KEY_WIDTH-1:0] key);
 +  logic [NODE_PTR_WIDTH-1:0] leader_id, node_id;
@@ -3628,6 +3917,7 @@ index 0000000..1dce193
 +    metadata_sent  <= '0;
 +    out_busy       <= 1'b0;
 +    memory_delay   <= '0;
++    tag_written    <= 1'b0;
 +  end 
 +  else begin
 +    net_state      <= net_state_next;
@@ -3639,6 +3929,7 @@ index 0000000..1dce193
 +    metadata_sent  <= metadata_sent_next;
 +    out_busy       <= out_busy_next;
 +    memory_delay   <= memory_delay_next;
++    tag_written    <= tag_written_next;
 +  end
 +end
 +
@@ -3652,6 +3943,7 @@ index 0000000..1dce193
 +
 +  ack_id_next        = ack_id;
 +  out_busy_next      = out_busy;
++  tag_written_next   = tag_written;
 +  nodes_count_next   = nodes_count;
 +  metadata_sent_next = metadata_sent;
 +  memory_delay_next  = memory_delay;
@@ -3700,9 +3992,13 @@ index 0000000..1dce193
 +          WRITE: begin
 +            m_axis_mem_tvalid = !net_fifo_empty;
 +            m_axis_mem_tdata  = net_fifo_out_tdata;
++            m_axis_mem_tdata[31:0]  = DIRTY_TAG;
 +            m_axis_mem_tkeep  = net_fifo_out_tkeep;
 +            m_axis_mem_tlast  = net_fifo_out_tlast;
 +            net_fifo_rd_en = m_axis_mem_tready;
++            if (m_axis_mem_tvalid) begin
++              tag_written_next = 1'b1;
++            end
 +
 +            metadata_mem_out_valid = 1'b1;
 +            metadata_mem_out       = net_meta_out;
@@ -3714,16 +4010,19 @@ index 0000000..1dce193
 +                nodes_count_next    = 0;
 +
 +                // Save the first beat for replicas
-+                if (m_axis_mem_tvalid) begin
++                if (!net_fifo_empty) begin
++                  rep_wr_en = 1'b1;
 +                  replica_mem_write.tdata = net_fifo_out_tdata;
++                  replica_mem_write.tdata[31:0] = DIRTY_TAG;
 +                  replica_mem_write.tkeep = net_fifo_out_tkeep;
 +                  replica_mem_write.tlast = net_fifo_out_tlast;
 +                  rep_write_ptr_next = 1;
++                  tag_written_next = 1'b1;
 +                end
 +
 +                // Start keeping track of acks for this write
 +                ack_table_write.meta       = net_meta_out;
-+                ack_table_write.id         = ack_id;
++                ack_table_write.index      = ack_id;
 +                ack_table_write.count      = 0;
 +                ack_table_write.is_running = 1'b1;
 +                ack_write_ptr = ack_id;
@@ -3737,8 +4036,8 @@ index 0000000..1dce193
 +            end
 +          end
 +          WRITE_ACK: begin
-+            ack_read_ptr      = net_meta_out.id;
-+            ack_write_ptr     = net_meta_out.id;
++            ack_read_ptr  = net_meta_out.index;
++            ack_write_ptr = net_meta_out.index;
 +            if (memory_delay != 2)
 +              memory_delay_next = memory_delay + 1;
 +            else begin
@@ -3749,12 +4048,6 @@ index 0000000..1dce193
 +                  metadata_out_valid  = 1'b1;
 +                  metadata_out        = ack_table_read.meta;
 +                  metadata_out.opcode = WRITE_ACK_LEADER;
-+
-+                  // Add padding to reach minimum ethernet frame size
-+                  m_axis_tvalid = 1'b1;
-+                  m_axis_tdata  = '0;
-+                  m_axis_tkeep  = 64'hfff;
-+                  m_axis_tlast  = 1'b1;
 +
 +                  if (m_axis_tready) begin
 +                    ack_table_write.is_running = 1'b0;
@@ -3787,8 +4080,16 @@ index 0000000..1dce193
 +      m_axis_mem_tkeep  = net_fifo_out_tkeep;
 +      m_axis_mem_tlast  = net_fifo_out_tlast;
 +      net_fifo_rd_en = m_axis_mem_tready;
-+      if (m_axis_mem_tvalid && m_axis_mem_tready && m_axis_mem_tlast)
-+        net_state_next = ACCEPT_NET;
++      if (!tag_written_next) begin
++        m_axis_mem_tdata[31:0] = DIRTY_TAG;
++        if (m_axis_mem_tvalid && m_axis_mem_tready) begin
++          tag_written_next = 1'b1;
++        end
++      end
++      if (m_axis_mem_tvalid && m_axis_mem_tready && m_axis_mem_tlast) begin
++        tag_written_next = 1'b0;
++        net_state_next   = ACCEPT_NET;
++      end
 +    end
 +    WRITE_REP: begin
 +      //FIXME: write pointer should always be at least one higher than read pointer
@@ -3801,6 +4102,10 @@ index 0000000..1dce193
 +        m_axis_mem_tkeep  = net_fifo_out_tkeep;
 +        m_axis_mem_tlast  = net_fifo_out_tlast;
 +        net_fifo_rd_en = m_axis_mem_tready;
++        if (!tag_written) begin
++          m_axis_mem_tdata[31:0] = DIRTY_TAG;
++          tag_written_next = 1'b1;
++        end
 +
 +        if (m_axis_mem_tvalid && m_axis_mem_tready) begin
 +          replica_mem_write.tdata = net_fifo_out_tdata;
@@ -3825,8 +4130,7 @@ index 0000000..1dce193
 +          if (rep_read_cnt == 0) begin
 +            metadata_out_valid = 1'b1;
 +            metadata_out       = net_meta_out;
-+            //FIXME: Change mac address
-+            metadata_out.id    = ack_id - 1;
++            metadata_out.index = ack_id - 1;
 +            metadata_out.ip    = NODE_IPS[nodes_count + 1];
 +            metadata_out.mac   = NODE_MACS[nodes_count + 1];
 +          end
@@ -3881,12 +4185,6 @@ index 0000000..1dce193
 +                metadata_out_valid  = 1'b1;
 +                metadata_out        = mem_meta_out;
 +                metadata_out.opcode = WRITE_ACK;
-+
-+                // Add padding to reach minimum ethernet frame size
-+                m_axis_tvalid = 1'b1;
-+                m_axis_tdata  = '0;
-+                m_axis_tkeep  = 64'hfff;
-+                m_axis_tlast  = 1'b1;
 +
 +                if (m_axis_tready) begin
 +                  out_busy_next[1] = 1'b0;
@@ -4084,6 +4382,436 @@ index 0000000..1dce193
 +);
 +
 +endmodule
+diff --git a/src/hbm_subsystem/replication_subsystem.sv b/src/hbm_subsystem/replication_subsystem.sv
+new file mode 100644
+index 0000000..f7bc59a
+--- /dev/null
++++ b/src/hbm_subsystem/replication_subsystem.sv
+@@ -0,0 +1,423 @@
++`timescale 1ns/1ps
++
++import metadata_pkg::*;
++
++module replication_subsystem #(
++  parameter int NUM_NODES   = 2,
++  parameter logic [31:0] NODE_IPS  [NUM_NODES] = '{default: '0},
++  parameter logic [47:0] NODE_MACS [NUM_NODES] = '{default: '0},
++
++  parameter int DATA_WIDTH  = 512,
++  parameter int KEEP_WIDTH  = DATA_WIDTH / 8,
++  parameter int FIFO_DEPTH  = 16,
++  parameter int BUCKET_SIZE = 10,
++  parameter int NUM_HASHES  = 4,
++  parameter int HASH_WIDTH  = 24,
++  parameter logic [HASH_WIDTH-1:0] HASH_MATRIX [NUM_HASHES][KEY_WIDTH-1:0] = '{default: '0}
++) (
++  input  logic axi_clk,
++  input  logic axi_rstn,
++
++  input  logic                  s_axis_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_tkeep,
++  input  logic                  s_axis_tlast,
++  output logic                  s_axis_tready,
++
++  input  st_metadata            metadata_in,
++  input  logic                  metadata_in_valid,
++
++  output logic                  m_axis_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_tkeep,
++  output logic                  m_axis_tlast,
++  input  logic                  m_axis_tready,
++
++  output st_metadata            metadata_out,
++  output logic                  metadata_out_valid,
++
++  input  logic                  s_axis_dm_tvalid,
++  input  logic [DATA_WIDTH-1:0] s_axis_dm_tdata,
++  input  logic [KEEP_WIDTH-1:0] s_axis_dm_tkeep,
++  input  logic                  s_axis_dm_tlast,
++  output logic                  s_axis_dm_tready,
++
++  output logic                  m_axis_dm_tvalid,
++  output logic [DATA_WIDTH-1:0] m_axis_dm_tdata,
++  output logic [KEEP_WIDTH-1:0] m_axis_dm_tkeep,
++  output logic                  m_axis_dm_tlast,
++  input  logic                  m_axis_dm_tready,
++
++  output logic                  m_axis_dm_mm2s_cmd_tvalid,
++  output logic           [79:0] m_axis_dm_mm2s_cmd_tdata,
++  input  logic                  m_axis_dm_mm2s_cmd_tready,
++
++  output logic                  m_axis_dm_s2mm_cmd_tvalid,
++  output logic           [79:0] m_axis_dm_s2mm_cmd_tdata,
++  input  logic                  m_axis_dm_s2mm_cmd_tready,
++
++  output logic           [33:0] m_axi_araddr   [NUM_HASHES],
++  output logic            [1:0] m_axi_arburst  [NUM_HASHES],
++  output logic            [3:0] m_axi_arcache  [NUM_HASHES],
++  output logic            [3:0] m_axi_arid     [NUM_HASHES],
++  output logic            [3:0] m_axi_arlen    [NUM_HASHES],
++  output logic            [1:0] m_axi_arlock   [NUM_HASHES],
++  output logic            [2:0] m_axi_arprot   [NUM_HASHES],
++  input  logic                  m_axi_arready  [NUM_HASHES],
++  output logic            [2:0] m_axi_arsize   [NUM_HASHES],
++  output logic                  m_axi_arvalid  [NUM_HASHES],
++  output logic           [33:0] m_axi_awaddr   [NUM_HASHES],
++  output logic            [1:0] m_axi_awburst  [NUM_HASHES],
++  output logic            [3:0] m_axi_awcache  [NUM_HASHES],
++  output logic            [3:0] m_axi_awid     [NUM_HASHES],
++  output logic            [3:0] m_axi_awlen    [NUM_HASHES],
++  output logic            [1:0] m_axi_awlock   [NUM_HASHES],
++  output logic            [2:0] m_axi_awprot   [NUM_HASHES],
++  input  logic                  m_axi_awready  [NUM_HASHES],
++  output logic            [2:0] m_axi_awsize   [NUM_HASHES],
++  output logic                  m_axi_awvalid  [NUM_HASHES],
++  input  logic            [3:0] m_axi_bid      [NUM_HASHES],
++  output logic                  m_axi_bready   [NUM_HASHES],
++  input  logic            [1:0] m_axi_bresp    [NUM_HASHES],
++  input  logic                  m_axi_bvalid   [NUM_HASHES],
++  input  logic          [255:0] m_axi_rdata    [NUM_HASHES],
++  input  logic            [3:0] m_axi_rid      [NUM_HASHES],
++  input  logic                  m_axi_rlast    [NUM_HASHES],
++  output logic                  m_axi_rready   [NUM_HASHES],
++  input  logic            [1:0] m_axi_rresp    [NUM_HASHES],
++  input  logic                  m_axi_rvalid   [NUM_HASHES],
++  output logic          [255:0] m_axi_wdata    [NUM_HASHES],
++  output logic                  m_axi_wlast    [NUM_HASHES],
++  input  logic                  m_axi_wready   [NUM_HASHES],
++  output logic           [31:0] m_axi_wstrb    [NUM_HASHES],
++  output logic                  m_axi_wvalid   [NUM_HASHES]
++);
++
++logic         axis_engine_to_memory_tvalid;
++logic [511:0] axis_engine_to_memory_tdata;
++logic  [63:0] axis_engine_to_memory_tkeep;
++logic         axis_engine_to_memory_tlast;
++logic         axis_engine_to_memory_tready;
++
++logic         axis_memory_to_engine_tvalid;
++logic [511:0] axis_memory_to_engine_tdata;
++logic  [63:0] axis_memory_to_engine_tkeep;
++logic         axis_memory_to_engine_tlast;
++logic         axis_memory_to_engine_tready;
++
++logic         axis_engine_to_deparser_tvalid;
++logic [511:0] axis_engine_to_deparser_tdata;
++logic  [63:0] axis_engine_to_deparser_tkeep;
++logic         axis_engine_to_deparser_tlast;
++logic         axis_engine_to_deparser_tready;
++
++st_metadata replication_metadata_in;
++logic       replication_metadata_in_valid;
++st_metadata replication_metadata_out;
++logic       replication_metadata_out_valid;
++st_metadata election_metadata_in;
++logic       election_metadata_in_valid;
++st_metadata election_metadata_out;
++logic       election_metadata_out_valid;
++st_metadata memory_metadata_in;
++logic       memory_metadata_in_valid;
++st_metadata memory_metadata_out;
++logic       memory_metadata_out_valid;
++
++// Arbiter between replication payload and frame padding
++always_comb begin
++  m_axis_tvalid = axis_engine_to_deparser_tvalid;
++  m_axis_tdata  = axis_engine_to_deparser_tdata;
++  m_axis_tkeep  = axis_engine_to_deparser_tkeep;
++  m_axis_tlast  = axis_engine_to_deparser_tlast;
++  axis_engine_to_deparser_tready = m_axis_tready; 
++  if (metadata_out_valid) begin
++    if (metadata_out.opcode != READ_RESULT && metadata_out.opcode != WRITE) begin
++      m_axis_tvalid = 1'b1;
++      m_axis_tdata  = '0;
++      m_axis_tkeep  = 64'hfff;
++      m_axis_tlast  = 1'b1;
++    end
++  end
++end
++
++// Buffer metadata arbiter inputs in FIFO
++st_metadata election_metadata_out_reg;
++logic       election_metadata_ready;
++logic       election_metadata_empty;
++st_metadata replication_metadata_out_reg;
++logic       replication_metadata_ready;
++logic       replication_metadata_empty;
++
++
++metadata_filter metadata_filter_inst (
++  .s_axis_tvalid  (metadata_in_valid), 
++  .s_axis_tdata   (metadata_in),
++  .s_axis_tdest   (metadata_in.opcode),
++
++  .m_axis_tvalid  ({election_metadata_in_valid, replication_metadata_in_valid}), 
++  .m_axis_tdata   ({election_metadata_in, replication_metadata_in}),
++  .m_axis_tdest   (),
++
++  .aclk           (axi_clk),
++  .aresetn        (axi_rstn)
++);
++
++metadata_arbiter metadata_arbiter_inst (
++  .s_axis_tvalid  ({!election_metadata_empty, !replication_metadata_empty}), 
++  .s_axis_tdata   ({election_metadata_out_reg, replication_metadata_out_reg}),
++  .s_axis_tready  ({election_metadata_ready, replication_metadata_ready}),
++
++  .m_axis_tvalid  (metadata_out_valid),
++  .m_axis_tdata   (metadata_out),
++  .m_axis_tready  (1'b1),
++
++  .s_req_suppress (2'b00),
++  .aclk           (axi_clk),
++  .aresetn        (axi_rstn)
++);
++
++replication_engine #(
++  .NUM_NODES                 (NUM_NODES),
++  .DATA_WIDTH                (DATA_WIDTH),
++  .NODE_IPS                  (NODE_IPS),
++  .NODE_MACS                 (NODE_MACS)
++) replication_engine_inst    (
++  .s_axis_tvalid             (s_axis_tvalid && s_axis_tkeep != 64'b0),
++  .s_axis_tdata              (s_axis_tdata),
++  .s_axis_tkeep              (s_axis_tkeep),
++  .s_axis_tlast              (s_axis_tlast),
++  .s_axis_tready             (s_axis_tready),
++
++  .metadata_in               (replication_metadata_in),
++  .metadata_in_valid         (replication_metadata_in_valid),
++
++  .m_axis_tvalid             (axis_engine_to_deparser_tvalid),
++  .m_axis_tdata              (axis_engine_to_deparser_tdata),
++  .m_axis_tkeep              (axis_engine_to_deparser_tkeep),
++  .m_axis_tlast              (axis_engine_to_deparser_tlast),
++  .m_axis_tready             (axis_engine_to_deparser_tready),
++
++  .metadata_out              (replication_metadata_out),
++  .metadata_out_valid        (replication_metadata_out_valid),
++
++  .s_axis_mem_tvalid         (axis_memory_to_engine_tvalid),
++  .s_axis_mem_tdata          (axis_memory_to_engine_tdata),
++  .s_axis_mem_tkeep          (axis_memory_to_engine_tkeep),
++  .s_axis_mem_tlast          (axis_memory_to_engine_tlast),
++  .s_axis_mem_tready         (axis_memory_to_engine_tready),
++
++  .metadata_mem_in           (memory_metadata_out),
++  .metadata_mem_in_valid     (memory_metadata_out_valid),
++
++  .m_axis_mem_tvalid         (axis_engine_to_memory_tvalid),
++  .m_axis_mem_tdata          (axis_engine_to_memory_tdata),
++  .m_axis_mem_tkeep          (axis_engine_to_memory_tkeep),
++  .m_axis_mem_tlast          (axis_engine_to_memory_tlast),
++  .m_axis_mem_tready         (axis_engine_to_memory_tready),
++
++  .metadata_mem_out          (memory_metadata_in),
++  .metadata_mem_out_valid    (memory_metadata_in_valid),
++
++  .axis_clk                  (axi_clk),
++  .axis_rstn                 (axi_rstn)
++);
++
++election_engine #(
++  .FOLLOWER_TIMEOUT          (25000000),  // 100ms
++  .LEADER_TIMEOUT            (12500000),  // 50ms
++  .NUM_NODES                 (NUM_NODES),
++  .FIFO_DEPTH                (FIFO_DEPTH),
++  .NODE_IPS                  (NODE_IPS),
++  .NODE_MACS                 (NODE_MACS)
++) election_engine_inst (
++  .s_axi_awaddr              ('0),
++  .s_axi_awvalid             (1'b0),
++  .s_axi_awready             (),
++  .s_axi_wdata               ('0),
++  .s_axi_wstrb               ('0),
++  .s_axi_wvalid              (1'b0),
++  .s_axi_wready              (),
++  .s_axi_bresp               (),
++  .s_axi_bvalid              (),
++  .s_axi_bready              (1'b1),
++  .s_axi_araddr              ('0),
++  .s_axi_arvalid             (1'b0),
++  .s_axi_arready             (),
++  .s_axi_rdata               (),
++  .s_axi_rresp               (),
++  .s_axi_rvalid              (),
++  .s_axi_rready              (1'b1),
++
++  .metadata_in               (election_metadata_in),
++  .metadata_in_valid         (election_metadata_in_valid),
++
++  .metadata_out              (election_metadata_out),
++  .metadata_out_valid        (election_metadata_out_valid),
++
++  .axis_aclk                 (axi_clk),
++  .axis_rstn                 (axi_rstn)
++);
++
++cuckoo_hash #(
++  .BUCKET_SIZE               (BUCKET_SIZE),
++  .NUM_FUNCTIONS             (NUM_HASHES),
++  .MAX_KICKS                 (4),
++  .DATA_WIDTH                (512),
++  .HASH_MATRIX               (HASH_MATRIX)
++) cuckoo_hash_inst (
++  .m_axi_araddr              (m_axi_araddr),
++  .m_axi_arburst             (m_axi_arburst),
++  .m_axi_arcache             (m_axi_arcache),
++  .m_axi_arid                (m_axi_arid),
++  .m_axi_arlen               (m_axi_arlen),
++  .m_axi_arlock              (m_axi_arlock),
++  .m_axi_arprot              (m_axi_arprot),
++  .m_axi_arready             (m_axi_arready),
++  .m_axi_arsize              (m_axi_arsize),
++  .m_axi_arvalid             (m_axi_arvalid),
++  .m_axi_awaddr              (m_axi_awaddr),
++  .m_axi_awburst             (m_axi_awburst),
++  .m_axi_awcache             (m_axi_awcache),
++  .m_axi_awid                (m_axi_awid),
++  .m_axi_awlen               (m_axi_awlen),
++  .m_axi_awlock              (m_axi_awlock),
++  .m_axi_awprot              (m_axi_awprot),
++  .m_axi_awready             (m_axi_awready),
++  .m_axi_awsize              (m_axi_awsize),
++  .m_axi_awvalid             (m_axi_awvalid),
++  .m_axi_bid                 (m_axi_bid),
++  .m_axi_bready              (m_axi_bready),
++  .m_axi_bresp               (m_axi_bresp),
++  .m_axi_bvalid              (m_axi_bvalid),
++  .m_axi_rdata               (m_axi_rdata),
++  .m_axi_rid                 (m_axi_rid),
++  .m_axi_rlast               (m_axi_rlast),
++  .m_axi_rready              (m_axi_rready),
++  .m_axi_rresp               (m_axi_rresp),
++  .m_axi_rvalid              (m_axi_rvalid),
++  .m_axi_wdata               (m_axi_wdata),
++  .m_axi_wlast               (m_axi_wlast),
++  .m_axi_wready              (m_axi_wready),
++  .m_axi_wstrb               (m_axi_wstrb),
++  .m_axi_wvalid              (m_axi_wvalid),
++
++  .s_axis_tready             (axis_engine_to_memory_tready),
++  .s_axis_tdata              (axis_engine_to_memory_tdata),
++  .s_axis_tkeep              (axis_engine_to_memory_tkeep),
++  .s_axis_tlast              (axis_engine_to_memory_tlast),
++  .s_axis_tvalid             (axis_engine_to_memory_tvalid),
++
++  .metadata_in               (memory_metadata_in),
++  .metadata_in_valid         (memory_metadata_in_valid),
++
++  .m_axis_tready             (axis_memory_to_engine_tready),
++  .m_axis_tdata              (axis_memory_to_engine_tdata),
++  .m_axis_tkeep              (axis_memory_to_engine_tkeep),
++  .m_axis_tlast              (axis_memory_to_engine_tlast),
++  .m_axis_tvalid             (axis_memory_to_engine_tvalid),
++
++  .metadata_out              (memory_metadata_out),
++  .metadata_out_valid        (memory_metadata_out_valid),
++
++  .s_axis_dm_tvalid          (s_axis_dm_tvalid),
++  .s_axis_dm_tdata           (s_axis_dm_tdata),
++  .s_axis_dm_tkeep           (s_axis_dm_tkeep),
++  .s_axis_dm_tlast           (s_axis_dm_tlast),
++  .s_axis_dm_tready          (s_axis_dm_tready),
++
++  .m_axis_dm_tvalid          (m_axis_dm_tvalid),
++  .m_axis_dm_tdata           (m_axis_dm_tdata),
++  .m_axis_dm_tkeep           (m_axis_dm_tkeep),
++  .m_axis_dm_tlast           (m_axis_dm_tlast),
++  .m_axis_dm_tready          (m_axis_dm_tready),
++
++  .m_axis_dm_mm2s_cmd_tvalid (m_axis_dm_mm2s_cmd_tvalid),
++  .m_axis_dm_mm2s_cmd_tdata  (m_axis_dm_mm2s_cmd_tdata),
++  .m_axis_dm_mm2s_cmd_tready (m_axis_dm_mm2s_cmd_tready),
++
++  .m_axis_dm_s2mm_cmd_tvalid (m_axis_dm_s2mm_cmd_tvalid),
++  .m_axis_dm_s2mm_cmd_tdata  (m_axis_dm_s2mm_cmd_tdata),
++  .m_axis_dm_s2mm_cmd_tready (m_axis_dm_s2mm_cmd_tready),
++
++  .clk                       (axi_clk),
++  .rstn                      (axi_rstn)
++);
++
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (METADATA_WIDTH),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
++) election_metadata (
++  .wr_en               (election_metadata_out_valid),
++  .din                 (election_metadata_out),
++  .wr_ack              (),
++  .rd_en               (election_metadata_ready),
++  .data_valid          (),
++  .dout                (election_metadata_out_reg),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (election_metadata_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axi_clk),
++  .rst                 (~axi_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (METADATA_WIDTH),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
++) replication_metadata (
++  .wr_en               (replication_metadata_out_valid),
++  .din                 (replication_metadata_out),
++  .wr_ack              (),
++  .rd_en               (replication_metadata_ready),
++  .data_valid          (),
++  .dout                (replication_metadata_out_reg),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (replication_metadata_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axi_clk),
++  .rst                 (~axi_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++endmodule
+\ No newline at end of file
 diff --git a/src/hbm_subsystem/vivado_ip/packet_arbiter.tcl b/src/hbm_subsystem/vivado_ip/packet_arbiter.tcl
 new file mode 100644
 index 0000000..227b301

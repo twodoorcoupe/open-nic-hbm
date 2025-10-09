@@ -16,7 +16,7 @@ packet = axi_packets.make_ip_pkt()
 axi_packets.send_packets("cmac0", packet)
 axi_packets.make_cycles_delay("cmac0", 1000)
 
- # Write
+# Write
 key = 1
 id = 1
 opcode = 1
@@ -43,7 +43,7 @@ axi_packets.make_cycles_delay("cmac0", 1000)
  # Write ack from replica
 key = 100
 id = 1
-opcode = 3 
+opcode = 4
 packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, id=id, payload="")
 axi_packets.send_packets("cmac0", packet)
 axi_packets.make_cycles_delay("cmac0", 1000)
@@ -51,8 +51,22 @@ axi_packets.make_cycles_delay("cmac0", 1000)
 # Write ack from leader
 key = 100
 id = 1
-opcode = 4  
+opcode = 5
+packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, id=id, payload="")
+axi_packets.send_packets("cmac0", packet)
+axi_packets.make_cycles_delay("cmac0", 1000)
+
+# Write ack from leader
+key = 0
+id = 0
+opcode = 6
+packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, id=id, payload="")
+axi_packets.send_packets("cmac0", packet)
+axi_packets.make_cycles_delay("cmac0", 1000)
+
+# Vote request from leader
+id = 1
+opcode = 8
 packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, dst_ip=dst_ip, src_ip=src_ip, opcode=opcode, key=key, id=id, payload="")
 axi_packets.send_packets("cmac0", packet)
 axi_packets.interface_manager.close_interfaces()
-
