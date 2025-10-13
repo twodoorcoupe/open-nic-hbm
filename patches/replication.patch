@@ -650,15 +650,15 @@ index 0000000..2542df7
 +endmodule
 diff --git a/src/hbm_subsystem/election_engine.sv b/src/hbm_subsystem/election_engine.sv
 new file mode 100644
-index 0000000..f52de85
+index 0000000..c5df947
 --- /dev/null
 +++ b/src/hbm_subsystem/election_engine.sv
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,306 @@
 +import metadata_pkg::*; 
 +
-+module election_engine #(
++module election_engine_raft #(
 +  parameter int NUM_NODES        = 5,
-+  parameter int FIFO_DEPTH       = 32,
++  parameter int FIFO_DEPTH       = 16,
 +  parameter int FOLLOWER_TIMEOUT = 25000000,  // 100ms
 +  parameter int LEADER_TIMEOUT   = 12500000,  // 50ms
 +  parameter  logic [31:0] NODE_IPS  [NUM_NODES] = '{default: '0},
@@ -688,8 +688,8 @@ index 0000000..f52de85
 +  output st_metadata  metadata_out,
 +  output logic        metadata_out_valid,
 +
-+  input  logic        axis_aclk,
-+  input  logic        axis_rstn
++  input  logic        axi_aclk,
++  input  logic        axi_rstn
 +);
 +
 +typedef enum logic [7:0] { 
@@ -698,73 +698,41 @@ index 0000000..f52de85
 +  LEADER
 +} role_e;
 +
++localparam CMD_WIDTH = METADATA_WIDTH - KEY_WIDTH;
 +localparam VOTES_MAJORITY = NUM_NODES / 2 + 1;
 +
-+logic [31:0] timer, timer_next;
 +logic  [7:0] term, term_next;
 +logic  [7:0] leader, leader_next;
-+logic  [7:0] sent, sent_next;
-+logic  [7:0] votes, votes_next;
 +role_e       role, role_next;
++logic [31:0] timer;
++logic        timeout;
++logic  [7:0] num_sent;
++logic        sending;
++logic  [7:0] votes;
++logic        majority;
 +
-+logic axi_write_ready;
-+logic axi_read_ready;
-+logic meta_rd_en;
-+logic meta_empty;
-+logic meta_available;
-+logic meta_out_valid;
-+st_metadata meta;
-+st_metadata meta_out;
-+
-+// Incoming metadata FIFO
-+xpm_fifo_sync #(
-+  .DOUT_RESET_VALUE    ("0"),
-+  .ECC_MODE            ("no_ecc"),
-+  .FIFO_MEMORY_TYPE    ("auto"),
-+  .FIFO_READ_LATENCY   (1),
-+  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
-+  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
-+  .READ_DATA_WIDTH     (METADATA_WIDTH),
-+  .READ_MODE           ("fwft"),
-+  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
-+) meta_fifo (
-+  .wr_en               (metadata_in_valid),
-+  .din                 (metadata_in),
-+  .wr_ack              (),
-+  .rd_en               (meta_rd_en),
-+  .data_valid          (),
-+  .dout                (meta),
-+  .wr_data_count       (),
-+  .rd_data_count       (),
-+  .empty               (meta_empty),
-+  .full                (),
-+  .almost_empty        (),
-+  .almost_full         (),
-+  .overflow            (),
-+  .underflow           (),
-+  .prog_empty          (),
-+  .prog_full           (),
-+  .sleep               (1'b0),
-+  .sbiterr             (),
-+  .dbiterr             (),
-+  .injectsbiterr       (1'b0),
-+  .injectdbiterr       (1'b0),
-+  .wr_clk              (axis_aclk),
-+  .rst                 (~axis_rstn),
-+  .rd_rst_busy         (),
-+  .wr_rst_busy         ()
-+);
++st_metadata received;
++logic       received_process;
++logic       received_empty;
++logic       received_available;
++logic       axi_write_ready;
++logic       axi_read_ready;
++logic       reset_timer;
++logic       reset_votes;
++logic       send_answer;
++logic       send_answer;
++logic       send_broadcast;
++opcode_e    send_opcode;
 +
 +// FIXME: If master is not ready when address is sent, it misses the response
 +assign axi_read_ready     = s_axi_arvalid && s_axi_rready;
 +assign axi_write_ready    = s_axi_awvalid && s_axi_wvalid;
-+assign meta_available     = !meta_empty;
-+assign metadata_out_valid = meta_out_valid;
-+assign metadata_out       = meta_out;
++assign received_available = !received_empty;
++assign metadata_out.key   = 0;
 +
 +// AXI Slave logic
-+always_ff @(posedge axis_aclk) begin
-+  if (!axis_rstn) begin
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn) begin
 +    s_axi_awready  <= 1'b0;
 +    s_axi_wready   <= 1'b0;
 +    s_axi_bvalid   <= 1'b0;
@@ -798,131 +766,198 @@ index 0000000..f52de85
 +end
 +
 +// RAFT Leader Election
-+always_ff @(posedge axis_aclk) begin
-+  if (!axis_rstn) begin
-+    timer  <= 0;
-+    role   <= FOLLOWER;
-+    term   <= 0;
-+    leader <= 0;
-+    votes  <= 0;
-+    sent   <= 0;
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn) begin
++    role     <= FOLLOWER;
++    term     <= 0;
++    leader   <= 0;
 +  end
 +  else begin
-+    timer  <= timer_next;
-+    role   <= role_next;
-+    term   <= term_next;
-+    leader <= leader_next;
-+    votes  <= votes_next;
-+    sent   <= sent_next;
++    role     <= role_next;
++    term     <= term_next;
++    leader   <= leader_next;
 +  end
 +end
 +
 +always_comb begin
-+  meta_out_valid = 1'b0;
-+  meta_out       = 0;
-+  meta_rd_en     = 1'b0;
-+  timer_next     = timer;
-+  role_next      = role;
-+  term_next      = term;
-+  leader_next    = leader;
-+  votes_next     = votes;
-+  sent_next      = sent;
++  role_next        = role;
++  term_next        = term;
++  leader_next      = leader;
++  received_process = 1'b1;
++  reset_timer      = 1'b0;
++  reset_votes      = 1'b0;
++  send_answer      = 1'b0;
++  send_broadcast   = 1'b0;
++  send_opcode      = HEARTBEAT;
 +  case (role)
 +    FOLLOWER: begin
-+      timer_next = timer + 1;
-+      if (timer == FOLLOWER_TIMEOUT) begin
-+        timer_next = 0;   
-+        term_next  = term + 1;
-+        role_next  = CANDIDATE;
++      if (timeout) begin
++        term_next = term + 1;
++        role_next = CANDIDATE;
 +      end
-+      else if (meta_available) begin
-+        timer_next    = 0;
-+        meta_rd_en = 1'b1;
-+        case (meta.opcode)
++      else if (received_available) begin
++        reset_timer          = 1'b1;
++        received_process = 1'b1;
++        case (received.opcode)
 +          HEARTBEAT: begin
-+            meta_out_valid  = 1'b1;
-+            meta_out.opcode = HEARTBEAT_ACK;
-+            meta_out.index  = meta.index;
-+            meta_out.ip     = meta.ip;
-+            meta_out.mac    = meta.mac;
++            send_answer = 1'b1;
++            send_opcode = HEARTBEAT_ACK;
 +          end
 +          VOTE_REQUEST: begin
-+            if (meta.index > term) begin
-+              term_next       = meta.index;
-+              leader_next     = meta.ip;
-+              meta_out_valid  = 1'b1;
-+              meta_out.opcode = VOTE;
-+              meta_out.index  = meta.index;
-+              meta_out.ip     = meta.ip;
-+              meta_out.mac    = meta.mac;
++            if (received.index > term) begin
++              term_next   = received.index;
++              leader_next = received.ip;
++              send_answer = 1'b1;
++              send_opcode = VOTE;
 +            end
 +          end
 +        endcase
 +      end
 +    end
 +    CANDIDATE: begin
-+      timer_next = timer + 1;
-+      if (timer == FOLLOWER_TIMEOUT) begin
-+        timer_next = 0;
-+        sent_next  = 0;
++      if (timeout) begin
++        reset_timer    = 1'b1;
++        send_broadcast = 1'b1;
++        send_opcode    = VOTE_REQUEST;
 +      end
-+      if (sent != NUM_NODES - 1) begin  
-+        sent_next       = sent + 1;
-+        meta_out_valid  = 1'b1;
-+        meta_out.opcode = VOTE_REQUEST;
-+        meta_out.index  = term;
-+        meta_out.ip     = NODE_IPS[sent + 1];
-+        meta_out.mac    = NODE_MACS[sent + 1];
-+      end
-+      else if (meta_available) begin
-+        meta_rd_en = 1'b1;
-+        case (meta.opcode)
++      else if (received_available) begin
++        case (received.opcode)
 +          HEARTBEAT: begin
-+            if (meta.index >= term) begin
-+              sent_next       = 0;
-+              role_next       = FOLLOWER;
-+              term_next       = meta.index;
-+              leader_next     = meta.ip;
-+              meta_out_valid  = 1'b1;
-+              meta_out.opcode = HEARTBEAT_ACK;
-+              meta_out.index  = meta.index;
-+              meta_out.ip     = meta.ip;
-+              meta_out.mac    = meta.mac;
++            if (received.index >= term) begin
++              reset_timer = 1'b1;
++              role_next   = FOLLOWER;
++              term_next   = received.index;
++              leader_next = received.ip;
++              send_answer = 1'b1;
++              send_opcode = HEARTBEAT_ACK;
 +            end
 +          end
 +          VOTE: begin
-+            votes_next = votes + 1;
-+            if (votes + 1 == VOTES_MAJORITY) begin
-+              timer_next    = LEADER_TIMEOUT;
-+              sent_next     = 0;
-+              votes_next    = 0;
-+              role_next     = LEADER;
-+              leader_next   = NODE_IPS[0];
++            if (majority) begin
++              reset_votes    = 1'b1;
++              role_next      = LEADER;
++              leader_next    = NODE_IPS[0];
++              send_broadcast = 1'b1;
++              send_opcode    = HEARTBEAT;
 +            end
 +          end
 +        endcase
 +      end
 +    end
 +    LEADER: begin
-+      timer_next = timer + 1;
-+      if (timer == LEADER_TIMEOUT) begin
-+        timer_next = timer;
-+        if (sent != NUM_NODES - 1) begin  
-+          sent_next       = sent + 1;
-+          meta_out_valid  = 1'b1;
-+          meta_out.opcode = HEARTBEAT;
-+          meta_out.index  = term;
-+          meta_out.ip     = NODE_IPS[sent + 1];
-+          meta_out.mac    = NODE_MACS[sent + 1];
-+        end
-+        else begin
-+          timer_next    = 0;
-+          sent_next = 0;
-+        end
++      if (timeout) begin
++        reset_timer    = 1'b1;
++        send_broadcast = 1'b1;
++        send_opcode    = HEARTBEAT;
 +      end
 +    end
 +  endcase
 +end
++
++// Timer 
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn || reset_timer) begin
++    timer   <= 0;
++    timeout <= 1'b0;
++  end
++  else begin
++    timer   <= timer + 1;
++    timeout <= 1'b0;
++    if (timer == FOLLOWER_TIMEOUT) begin
++      timer   <= timer;
++      timeout <= 1'b1;
++    end
++  end
++end
++
++// Receiver
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn || reset_votes) begin
++    votes    <= 0;
++    majority <= 1'b0;
++  end
++  else begin
++    if (metadata_in_valid && metadata_in.opcode == VOTE) begin
++      votes <= votes + 1;
++      if (votes == VOTES_MAJORITY) begin
++        majority <= 1'b1;
++      end
++    end
++  end
++end
++
++// Sender
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn) begin
++    metadata_out_valid <= 1'b0;
++    metadata_out       <= '{default: '0};
++    num_sent           <= 0;
++    sending            <= 1'b0;
++  end
++  else begin 
++    metadata_out_valid <= 1'b0;
++    if (send_answer) begin
++      metadata_out_valid  <= 1'b1;
++      metadata_out.opcode <= send_opcode;
++      metadata_out.index  <= received.index;
++      metadata_out.ip     <= received.ip;
++      metadata_out.mac    <= received.mac;
++    end
++    if (send_broadcast || sending) begin
++      sending <= 1'b0;
++      if (num_sent != NUM_NODES - 1) begin
++        num_sent            <= num_sent + 1;
++        sending             <= 1'b1;
++        metadata_out_valid  <= 1'b1;
++        metadata_out.index  <= term;
++        metadata_out.ip     <= NODE_IPS[num_sent + 1];
++        metadata_out.mac    <= NODE_MACS[num_sent + 1];
++        if (send_broadcast) begin
++          metadata_out.opcode <= send_opcode;
++        end
++      end
++    end
++  end
++end
++
++// Received packets FIFO
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (CMD_WIDTH),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (CMD_WIDTH)
++) receiver_fifo (
++  .wr_en               (metadata_in_valid),
++  .din                 (metadata_in),
++  .wr_ack              (),
++  .rd_en               (received_process),
++  .data_valid          (),
++  .dout                (received),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (received_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axi_aclk),
++  .rst                 (~axi_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
 +
 +endmodule
 diff --git a/src/hbm_subsystem/hbm_bd.tcl b/src/hbm_subsystem/hbm_bd.tcl
