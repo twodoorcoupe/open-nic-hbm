@@ -650,10 +650,10 @@ index 0000000..2b0254d
 +endmodule
 diff --git a/src/hbm_subsystem/election_engine.sv b/src/hbm_subsystem/election_engine.sv
 new file mode 100644
-index 0000000..e261f0c
+index 0000000..578e210
 --- /dev/null
 +++ b/src/hbm_subsystem/election_engine.sv
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,260 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*; 
@@ -667,7 +667,8 @@ index 0000000..e261f0c
 +  parameter logic [TIMER_WIDTH-1:0] TAP_MASK = 30'h60000000,
 +  parameter int USE_CONTROLLER = 1
 +) (
-+  input  logic        axi_aclk,
++  input  logic        axis_aclk,
++  input  logic        axil_aclk,
 +  input  logic        axi_rstn,
 +
 +  input  logic [31:0] s_axil_awaddr,
@@ -718,6 +719,7 @@ index 0000000..e261f0c
 +logic                 axi_read_ready;
 +logic                 broadcast;
 +logic                 update_send;
++logic                 update_delay;
 +logic                 update_received;
 +st_election_command   send_command;
 +st_election_command   received_command;
@@ -732,7 +734,7 @@ index 0000000..e261f0c
 +// AXI Slave logic
 +generate
 +  if (!USE_CONTROLLER) begin
-+    always_ff @(posedge axi_aclk) begin
++    always_ff @(posedge axil_aclk) begin
 +      s_axil_bvalid   <= 1'b0;
 +      s_axil_rvalid   <= 1'b0;
 +      if (!axi_rstn) begin
@@ -744,6 +746,7 @@ index 0000000..e261f0c
 +        s_axil_rresp    <= 2'b00;
 +      end 
 +      else begin
++        s_axil_bvalid   <= 1'b1;
 +        s_axil_awready <= axi_write_ready;
 +        s_axil_wready  <= axi_write_ready;
 +        s_axil_arready <= axi_read_ready;
@@ -777,7 +780,7 @@ index 0000000..e261f0c
 +      .BROADCAST_ID     (BROADCAST_ID),
 +      .LEADER_ID        (LEADER_ID)
 +    ) election_engine_controller_inst (
-+      .axi_aclk         (axi_aclk),
++      .axis_aclk        (axis_aclk),
 +      .axi_rstn         (axi_rstn),
 +      .num_nodes        (num_nodes),
 +      .received_command (received_command),
@@ -789,7 +792,7 @@ index 0000000..e261f0c
 +endgenerate
 +
 +// Receiver
-+always_ff @(posedge axi_aclk) begin
++always_ff @(posedge axis_aclk) begin
 +  if (!axi_rstn) begin
 +    received_command <= '0;
 +    received_seq     <= 1;
@@ -813,29 +816,36 @@ index 0000000..e261f0c
 +end
 +
 +// Sender
-+always_ff @(posedge axi_aclk) begin
++always_ff @(posedge axis_aclk) begin
 +  metadata_out_valid <= 1'b0;
 +  if (!axi_rstn) begin
 +    metadata_out <= 0;
 +    num_sent     <= 0;
 +    send_seq     <= 1;
 +    update_send  <= 1'b1;
++    update_delay <= 1'b0;
 +  end
-+  // Wait one cycle for address BRAM
 +  else if (send_command.sequence_number != send_seq) begin
-+    update_send <= 1'b1;
++    update_send <= 2'b01;
 +    send_seq    <= send_command.sequence_number;
 +    if (broadcast) begin
 +      num_sent <= num_sent + 1;
 +    end
 +  end
++  // Wait one extra cycle for address BRAM
++  // TODO: Refactor this
 +  else if (update_send) begin
++    update_delay <= 1'b1;
++    update_send  <= 1'b0;
++  end
++  else if (update_delay) begin
 +    metadata_out_valid  <= 1'b1;
 +    metadata_out.ip     <= send_ip;
 +    metadata_out.mac    <= send_mac;
 +    metadata_out.opcode <= send_command.opcode;
 +    metadata_out.index  <= send_command.message_id;
 +    metadata_out.key    <= 0;
++    update_delay        <= 1'b0;
 +    if (broadcast) begin
 +      num_sent <= num_sent + 1;
 +      if (num_sent == num_nodes - 1) begin
@@ -852,7 +862,7 @@ index 0000000..e261f0c
 +nodes_table #( 
 +  .TABLE_SIZE          (MAX_NODES)
 +) nodes_table_inst (
-+  .aclk                (axi_aclk),
++  .aclk                (axis_aclk),
 +  .rstn                (axi_rstn),
 +  .metadata_valid      (metadata_in_valid),
 +  .metadata            (metadata_in),
@@ -897,7 +907,7 @@ index 0000000..e261f0c
 +  .dbiterr             (),
 +  .injectsbiterr       (1'b0),
 +  .injectdbiterr       (1'b0),
-+  .wr_clk              (axi_aclk),
++  .wr_clk              (axis_aclk),
 +  .rst                 (~axi_rstn),
 +  .rd_rst_busy         (),
 +  .wr_rst_busy         ()
@@ -906,7 +916,7 @@ index 0000000..e261f0c
 +endmodule
 diff --git a/src/hbm_subsystem/election_engine_controller.sv b/src/hbm_subsystem/election_engine_controller.sv
 new file mode 100644
-index 0000000..e1aee25
+index 0000000..fbf4d98
 --- /dev/null
 +++ b/src/hbm_subsystem/election_engine_controller.sv
 @@ -0,0 +1,198 @@
@@ -923,7 +933,7 @@ index 0000000..e1aee25
 +  parameter logic             [7:0] BROADCAST_ID = '1,
 +  parameter logic             [7:0] LEADER_ID    = '0
 +) (
-+  input  logic                 axi_aclk,
++  input  logic                 axis_aclk,
 +  input  logic                 axi_rstn,
 +
 +  input  logic [PTR_WIDTH-1:0] num_nodes,
@@ -953,7 +963,7 @@ index 0000000..e1aee25
 +logic                   reset_timer;
 +
 +// RAFT Leader Election
-+always_ff @(posedge axi_aclk) begin
++always_ff @(posedge axis_aclk) begin
 +  if (!axi_rstn) begin
 +    role         <= FOLLOWER;
 +    term         <= 0;
@@ -1074,7 +1084,7 @@ index 0000000..e1aee25
 +end
 +
 +// Timer 
-+always_ff @(posedge axi_aclk) begin
++always_ff @(posedge axis_aclk) begin
 +  if (!axi_rstn || reset_timer) begin
 +    timer   <= 0;
 +    timeout <= 1'b0;
@@ -1090,7 +1100,7 @@ index 0000000..e1aee25
 +end
 +
 +// Galois LSFR
-+always_ff @(posedge axi_aclk) begin
++always_ff @(posedge axis_aclk) begin
 +  if (!axi_rstn) begin
 +    random    <= SEED;
 +    timer_max <= SEED;
@@ -2098,10 +2108,10 @@ index 97fedbc..1f9a435 100644
  
    # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..27e0196 100644
+index 4571b97..b1d5f21 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
-@@ -1,4 +1,12 @@
+@@ -1,4 +1,17 @@
 -module hbm_subsystem (
 +`timescale 1ns/1ps
 +
@@ -2112,13 +2122,21 @@ index 4571b97..27e0196 100644
 +  parameter logic [31:0] NODE_IP     = '0,
 +  parameter logic [47:0] NODE_MAC    = '0
 +) (
++  input          axis_aclk,
++  input          axil_aclk,
++  input          axi_rstn,
++  input          hbm_ref_clk,
++
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
    input    [3:0] s_axi_arcache,
-@@ -40,55 +48,670 @@ module hbm_subsystem (
+@@ -40,55 +53,667 @@ module hbm_subsystem (
    input   [63:0] s_axi_wuser,
    input          s_axi_wvalid,
  
+-  input          axi_clk,
+-  input          axi_resetn,
+-  input          hbm_ref_clk
 +  input   [31:0] s_axil_awaddr,
 +  input          s_axil_awvalid,
 +  output         s_axil_awready,
@@ -2171,12 +2189,7 @@ index 4571b97..27e0196 100644
 +  input   [15:0] s_axis_cmac_c2h_tuser_size,
 +  input   [15:0] s_axis_cmac_c2h_tuser_src,
 +  input   [15:0] s_axis_cmac_c2h_tuser_dst,
-+  output         s_axis_cmac_c2h_tready,
-+
-   input          axi_clk,
--  input          axi_resetn,
-+  input          axi_rstn,
-   input          hbm_ref_clk
++  output         s_axis_cmac_c2h_tready
  );
 -  
 -  hbm_bd_wrapper hbm_inst (
@@ -2302,41 +2315,41 @@ index 4571b97..27e0196 100644
 +  24'hE19F50, 24'hF2B060, 24'h03C170, 24'h14D280
 +}};
 +
-+logic  [33:0]  axi_araddr   [NUM_HASHES];
-+logic   [1:0]  axi_arburst  [NUM_HASHES];
-+logic   [3:0]  axi_arcache  [NUM_HASHES];
-+logic   [3:0]  axi_arid     [NUM_HASHES];
-+logic   [3:0]  axi_arlen    [NUM_HASHES];
-+logic   [1:0]  axi_arlock   [NUM_HASHES];
-+logic   [2:0]  axi_arprot   [NUM_HASHES];
-+logic          axi_arready  [NUM_HASHES];
-+logic   [2:0]  axi_arsize   [NUM_HASHES];
-+logic          axi_arvalid  [NUM_HASHES];
-+logic  [33:0]  axi_awaddr   [NUM_HASHES];
-+logic   [1:0]  axi_awburst  [NUM_HASHES];
-+logic   [3:0]  axi_awcache  [NUM_HASHES];
-+logic   [3:0]  axi_awid     [NUM_HASHES];
-+logic   [3:0]  axi_awlen    [NUM_HASHES];
-+logic   [1:0]  axi_awlock   [NUM_HASHES];
-+logic   [2:0]  axi_awprot   [NUM_HASHES];
-+logic          axi_awready  [NUM_HASHES];
-+logic   [2:0]  axi_awsize   [NUM_HASHES];
-+logic          axi_awvalid  [NUM_HASHES];
-+logic   [3:0]  axi_bid      [NUM_HASHES];
-+logic          axi_bready   [NUM_HASHES];
-+logic   [1:0]  axi_bresp    [NUM_HASHES];
-+logic          axi_bvalid   [NUM_HASHES];
-+logic [255:0]  axi_rdata    [NUM_HASHES];
-+logic   [3:0]  axi_rid      [NUM_HASHES];
-+logic          axi_rlast    [NUM_HASHES];
-+logic          axi_rready   [NUM_HASHES];
-+logic   [1:0]  axi_rresp    [NUM_HASHES];
-+logic          axi_rvalid   [NUM_HASHES];
-+logic [255:0]  axi_wdata    [NUM_HASHES];
-+logic          axi_wlast    [NUM_HASHES];
-+logic          axi_wready   [NUM_HASHES];
-+logic  [31:0]  axi_wstrb    [NUM_HASHES];
-+logic          axi_wvalid   [NUM_HASHES];
++logic  [33:0] axi_araddr   [NUM_HASHES];
++logic   [1:0] axi_arburst  [NUM_HASHES];
++logic   [3:0] axi_arcache  [NUM_HASHES];
++logic   [3:0] axi_arid     [NUM_HASHES];
++logic   [3:0] axi_arlen    [NUM_HASHES];
++logic   [1:0] axi_arlock   [NUM_HASHES];
++logic   [2:0] axi_arprot   [NUM_HASHES];
++logic         axi_arready  [NUM_HASHES];
++logic   [2:0] axi_arsize   [NUM_HASHES];
++logic         axi_arvalid  [NUM_HASHES];
++logic  [33:0] axi_awaddr   [NUM_HASHES];
++logic   [1:0] axi_awburst  [NUM_HASHES];
++logic   [3:0] axi_awcache  [NUM_HASHES];
++logic   [3:0] axi_awid     [NUM_HASHES];
++logic   [3:0] axi_awlen    [NUM_HASHES];
++logic   [1:0] axi_awlock   [NUM_HASHES];
++logic   [2:0] axi_awprot   [NUM_HASHES];
++logic         axi_awready  [NUM_HASHES];
++logic   [2:0] axi_awsize   [NUM_HASHES];
++logic         axi_awvalid  [NUM_HASHES];
++logic   [3:0] axi_bid      [NUM_HASHES];
++logic         axi_bready   [NUM_HASHES];
++logic   [1:0] axi_bresp    [NUM_HASHES];
++logic         axi_bvalid   [NUM_HASHES];
++logic [255:0] axi_rdata    [NUM_HASHES];
++logic   [3:0] axi_rid      [NUM_HASHES];
++logic         axi_rlast    [NUM_HASHES];
++logic         axi_rready   [NUM_HASHES];
++logic   [1:0] axi_rresp    [NUM_HASHES];
++logic         axi_rvalid   [NUM_HASHES];
++logic [255:0] axi_wdata    [NUM_HASHES];
++logic         axi_wlast    [NUM_HASHES];
++logic         axi_wready   [NUM_HASHES];
++logic  [31:0] axi_wstrb    [NUM_HASHES];
++logic         axi_wvalid   [NUM_HASHES];
 +
 +logic         axis_dm_write_tvalid;
 +logic [511:0] axis_dm_write_tdata;
@@ -2411,7 +2424,7 @@ index 4571b97..27e0196 100644
 +
 +assign rstn = axi_rstn && apb_complete_reg;
 +
-+always_ff @(posedge axi_clk) begin
++always_ff @(posedge axis_aclk) begin
 +  if(~axi_rstn)
 +    apb_complete_reg <= 1'b0;
 +  else
@@ -2424,7 +2437,7 @@ index 4571b97..27e0196 100644
 +
 +assign parser_metadata_in_valid = parser_metadata_in_valid_toggle && s_axis_cmac_c2h_tvalid && s_axis_cmac_c2h_tready;
 +
-+always_ff @(posedge axi_clk) begin
++always_ff @(posedge axis_aclk) begin
 +  if(~axi_rstn) begin
 +    parser_metadata_in_valid_toggle <= 1'b1;
 +  end
@@ -2442,7 +2455,7 @@ index 4571b97..27e0196 100644
 +
 +assign axis_parser_to_filter_tdest = parser_metadata_valid ? is_replication : is_replication_reg;
 +
-+always_ff @(posedge axi_clk) begin
++always_ff @(posedge axis_aclk) begin
 +  if(~axi_rstn)
 +    is_replication_reg <= 1'b0;
 +  else if (parser_metadata_valid)
@@ -2462,6 +2475,10 @@ index 4571b97..27e0196 100644
 +  .HASH_WIDTH                (HASH_WIDTH),
 +  .HASH_MATRIX               (HASH_MATRIX)
 +) replication_subsystem_inst (
++  .axis_aclk                 (axis_aclk),
++  .axil_aclk                 (axil_aclk),
++  .axi_rstn                  (rstn),
++
 +  .s_axil_awvalid            (s_axil_awvalid),
 +  .s_axil_awaddr             (s_axil_awaddr),
 +  .s_axil_awready            (s_axil_awready),
@@ -2543,10 +2560,7 @@ index 4571b97..27e0196 100644
 +  .m_axi_wlast               (axi_wlast),
 +  .m_axi_wready              (axi_wready),
 +  .m_axi_wstrb               (axi_wstrb),
-+  .m_axi_wvalid              (axi_wvalid),
-+
-+  .axi_clk                   (axi_clk),
-+  .axi_rstn                  (rstn)
++  .m_axi_wvalid              (axi_wvalid)
 +);
 +
 +packet_parser packet_parser_inst (
@@ -2568,7 +2582,7 @@ index 4571b97..27e0196 100644
 +  .user_metadata_out       ({parser_metadata, is_replication}),
 +  .user_metadata_out_valid (parser_metadata_valid),
 +
-+  .s_axis_aclk             (axi_clk),
++  .s_axis_aclk             (axis_aclk),
 +  .s_axis_aresetn          (rstn)
 +);
 +
@@ -2589,7 +2603,7 @@ index 4571b97..27e0196 100644
 +  .user_metadata_out       (),
 +  .user_metadata_out_valid (),
 +
-+  .s_axis_aclk             (axi_clk),
++  .s_axis_aclk             (axis_aclk),
 +  .s_axis_aresetn          (rstn)
 +);
 +
@@ -2610,7 +2624,7 @@ index 4571b97..27e0196 100644
 +  .m_axis_tdest            (),
 +  .m_axis_tready           ({axis_filter_to_replication_tready, m_axis_qdma_c2h_tready}),
 +
-+  .aclk                    (axi_clk),
++  .aclk                    (axis_aclk),
 +  .aresetn                 (rstn)
 +);
 +
@@ -2630,7 +2644,7 @@ index 4571b97..27e0196 100644
 +  .m_axis_tready           (m_axis_cmac_h2c_tready),
 +
 +  .s_req_suppress          (2'b0),
-+  .aclk                    (axi_clk),
++  .aclk                    (axis_aclk),
 +  .aresetn                 (rstn)
 +);
 +
@@ -2830,7 +2844,7 @@ index 4571b97..27e0196 100644
 +
 +  .apb_complete_0                  (apb_complete_0),
 +  .apb_complete_1                  (),
-+  .axi_clk                         (axi_clk),
++  .axi_clk                         (axis_aclk),
 +  .axi_resetn                      (axi_rstn),
 +  .hbm_ref_clk                     (hbm_ref_clk)
 +);
@@ -4096,7 +4110,7 @@ index 0000000..36fa4ce
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/nodes_table.sv b/src/hbm_subsystem/nodes_table.sv
 new file mode 100644
-index 0000000..6208b7a
+index 0000000..bfdb65f
 --- /dev/null
 +++ b/src/hbm_subsystem/nodes_table.sv
 @@ -0,0 +1,81 @@
@@ -4173,7 +4187,7 @@ index 0000000..6208b7a
 +    if (metadata_valid && index_table[hashed_meta_ip] == 0) begin
 +      index_table[hashed_meta_ip] <= num_nodes;
 +      num_nodes                   <= num_nodes + 1;
-+      write_ptr                   <= num_nodes - 1;
++      write_ptr                   <= num_nodes;
 +      write_en                    <= 1'b1;
 +      write_data                  <= {metadata.ip, metadata.mac};
 +    end
@@ -5442,10 +5456,10 @@ index 0000000..75929b2
 +endmodule
 diff --git a/src/hbm_subsystem/replication_subsystem.sv b/src/hbm_subsystem/replication_subsystem.sv
 new file mode 100644
-index 0000000..66065e7
+index 0000000..ee073d3
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_subsystem.sv
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,440 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*;
@@ -5465,8 +5479,9 @@ index 0000000..66065e7
 +  parameter logic [TIMER_WIDTH-1:0] TAP_MASK = 30'h60000000,
 +  parameter logic [HASH_WIDTH-1:0] HASH_MATRIX [NUM_HASHES][KEY_WIDTH-1:0] = '{default: '0}
 +) (
-+  input  logic axi_clk,
-+  input  logic axi_rstn,
++  input  logic                  axis_aclk,
++  input  logic                  axil_aclk,
++  input  logic                  axi_rstn,
 +
 +  input  logic                  s_axis_tvalid,
 +  input  logic [DATA_WIDTH-1:0] s_axis_tdata,
@@ -5629,7 +5644,7 @@ index 0000000..66065e7
 +  .m_axis_tready  (1'b1),
 +
 +  .s_req_suppress (2'b00),
-+  .aclk           (axi_clk),
++  .aclk           (axis_aclk),
 +  .aresetn        (axi_rstn)
 +);
 +
@@ -5638,7 +5653,7 @@ index 0000000..66065e7
 +  .DATA_WIDTH                (DATA_WIDTH),
 +  .FIFO_DEPTH                (FIFO_DEPTH)
 +) replication_engine_inst    (
-+  .axis_clk                  (axi_clk),
++  .axis_clk                  (axis_aclk),
 +  .axis_rstn                 (axi_rstn),
 +
 +  .s_axis_tvalid             (s_axis_tvalid && s_axis_tkeep != 64'b0),
@@ -5693,7 +5708,8 @@ index 0000000..66065e7
 +  .SEED                      (SEED),
 +  .USE_CONTROLLER            (1)
 +) election_engine_inst (
-+  .axi_aclk                  (axi_clk),
++  .axis_aclk                 (axis_aclk),
++  .axil_aclk                 (axil_aclk),
 +  .axi_rstn                  (axi_rstn),
 +
 +  .s_axil_awvalid            (s_axil_awvalid),
@@ -5803,7 +5819,7 @@ index 0000000..66065e7
 +  .m_axis_dm_s2mm_cmd_tdata  (m_axis_dm_s2mm_cmd_tdata),
 +  .m_axis_dm_s2mm_cmd_tready (m_axis_dm_s2mm_cmd_tready),
 +
-+  .clk                       (axi_clk),
++  .clk                       (axis_aclk),
 +  .rstn                      (axi_rstn)
 +);
 +
@@ -5839,7 +5855,7 @@ index 0000000..66065e7
 +  .dbiterr             (),
 +  .injectsbiterr       (1'b0),
 +  .injectdbiterr       (1'b0),
-+  .wr_clk              (axi_clk),
++  .wr_clk              (axis_aclk),
 +  .rst                 (~axi_rstn),
 +  .rd_rst_busy         (),
 +  .wr_rst_busy         ()
@@ -5877,7 +5893,7 @@ index 0000000..66065e7
 +  .dbiterr             (),
 +  .injectsbiterr       (1'b0),
 +  .injectdbiterr       (1'b0),
-+  .wr_clk              (axi_clk),
++  .wr_clk              (axis_aclk),
 +  .rst                 (~axi_rstn),
 +  .rd_rst_busy         (),
 +  .wr_rst_busy         ()
@@ -6010,7 +6026,7 @@ index 0000000..b1b9d1d
 +}
 \ No newline at end of file
 diff --git a/src/open_nic_shell.sv b/src/open_nic_shell.sv
-index 572e191..1c31389 100644
+index 572e191..079501e 100644
 --- a/src/open_nic_shell.sv
 +++ b/src/open_nic_shell.sv
 @@ -25,7 +25,10 @@ module open_nic_shell #(
@@ -6060,40 +6076,113 @@ index 572e191..1c31389 100644
    // Packet adapter interfaces to the box running at 250MHz
    wire     [NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tvalid;
    wire [512*NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tdata;
-@@ -766,7 +788,28 @@ module open_nic_shell #(
+@@ -766,51 +788,109 @@ module open_nic_shell #(
    end: qdma_if
    endgenerate
  
 -  hbm_subsystem hbm_subsystem_inst (
+-    .s_axi_araddr         (axi_araddr),
+-    .s_axi_arburst        (axi_arburst),
+-    .s_axi_arcache        (axi_arcache),
+-    .s_axi_arid           (axi_arid),
+-    .s_axi_arlen          (axi_arlen),
+-    .s_axi_arlock         (axi_arlock),
+-    .s_axi_arprot         (axi_arprot),
+-    .s_axi_arqos          (axi_arqos),
+-    .s_axi_arready        (axi_arready),
+-    .s_axi_arsize         (axi_arsize),
+-    .s_axi_aruser         (axi_aruser),
+-    .s_axi_arvalid        (axi_arvalid),
+-    .s_axi_awaddr         (axi_awaddr),
+-    .s_axi_awburst        (axi_awburst),
+-    .s_axi_awcache        (axi_awcache),
+-    .s_axi_awid           (axi_awid),
+-    .s_axi_awlen          (axi_awlen),
+-    .s_axi_awlock         (axi_awlock),
+-    .s_axi_awprot         (axi_awprot),
+-    .s_axi_awqos          (axi_awqos),
+-    .s_axi_awready        (axi_awready),
+-    .s_axi_awsize         (axi_awsize),
+-    .s_axi_awuser         (axi_awuser),
+-    .s_axi_awvalid        (axi_awvalid),
+-    .s_axi_bid            (axi_bid),
+-    .s_axi_bready         (axi_bready),
+-    .s_axi_bresp          (axi_bresp),
+-    .s_axi_bvalid         (axi_bvalid),
+-    .s_axi_rdata          (axi_rdata),
+-    .s_axi_rid            (axi_rid),
+-    .s_axi_rlast          (axi_rlast),
+-    .s_axi_rready         (axi_rready),
+-    .s_axi_rresp          (axi_rresp),
+-    .s_axi_rvalid         (axi_rvalid),
+-    .s_axi_wdata          (axi_wdata),
+-    .s_axi_wlast          (axi_wlast),
+-    .s_axi_wready         (axi_wready),
+-    .s_axi_wstrb          (axi_wstrb),
+-    .s_axi_wuser          (axi_wuser),
+-    .s_axi_wvalid         (axi_wvalid),
 +  hbm_subsystem #(
-+    .BUCKET_SIZE          (BUCKET_SIZE),
-+    .NODE_IP              (NODE_IP),
-+    .NODE_MAC             (NODE_MAC)
++    .BUCKET_SIZE                      (BUCKET_SIZE),
++    .NODE_IP                          (NODE_IP),
++    .NODE_MAC                         (NODE_MAC)
 +  ) hbm_subsystem_inst (
-+    .s_axil_awvalid       (axil_box0_awvalid),
-+    .s_axil_awaddr        (axil_box0_awaddr),
-+    .s_axil_awready       (axil_box0_awready),
-+    .s_axil_wvalid        (axil_box0_wvalid),
-+    .s_axil_wdata         (axil_box0_wdata),
-+    .s_axil_wready        (axil_box0_wready),
-+    .s_axil_bvalid        (axil_box0_bvalid),
-+    .s_axil_bresp         (axil_box0_bresp),
-+    .s_axil_bready        (axil_box0_bready),
-+    .s_axil_arvalid       (axil_box0_arvalid),
-+    .s_axil_araddr        (axil_box0_araddr),
-+    .s_axil_arready       (axil_box0_arready),
-+    .s_axil_rvalid        (axil_box0_rvalid),
-+    .s_axil_rdata         (axil_box0_rdata),
-+    .s_axil_rresp         (axil_box0_rresp),
-+    .s_axil_rready        (axil_box0_rready),
++    .s_axil_awvalid                   (axil_box0_awvalid),
++    .s_axil_awaddr                    (axil_box0_awaddr),
++    .s_axil_awready                   (axil_box0_awready),
++    .s_axil_wvalid                    (axil_box0_wvalid),
++    .s_axil_wdata                     (axil_box0_wdata),
++    .s_axil_wready                    (axil_box0_wready),
++    .s_axil_bvalid                    (axil_box0_bvalid),
++    .s_axil_bresp                     (axil_box0_bresp),
++    .s_axil_bready                    (axil_box0_bready),
++    .s_axil_arvalid                   (axil_box0_arvalid),
++    .s_axil_araddr                    (axil_box0_araddr),
++    .s_axil_arready                   (axil_box0_arready),
++    .s_axil_rvalid                    (axil_box0_rvalid),
++    .s_axil_rdata                     (axil_box0_rdata),
++    .s_axil_rresp                     (axil_box0_rresp),
++    .s_axil_rready                    (axil_box0_rready),
 +
-     .s_axi_araddr         (axi_araddr),
-     .s_axi_arburst        (axi_arburst),
-     .s_axi_arcache        (axi_arcache),
-@@ -807,10 +850,46 @@ module open_nic_shell #(
-     .s_axi_wstrb          (axi_wstrb),
-     .s_axi_wuser          (axi_wuser),
-     .s_axi_wvalid         (axi_wvalid),
++    .s_axi_araddr                     (axi_araddr),
++    .s_axi_arburst                    (axi_arburst),
++    .s_axi_arcache                    (axi_arcache),
++    .s_axi_arid                       (axi_arid),
++    .s_axi_arlen                      (axi_arlen),
++    .s_axi_arlock                     (axi_arlock),
++    .s_axi_arprot                     (axi_arprot),
++    .s_axi_arqos                      (axi_arqos),
++    .s_axi_arready                    (axi_arready),
++    .s_axi_arsize                     (axi_arsize),
++    .s_axi_aruser                     (axi_aruser),
++    .s_axi_arvalid                    (axi_arvalid),
++    .s_axi_awaddr                     (axi_awaddr),
++    .s_axi_awburst                    (axi_awburst),
++    .s_axi_awcache                    (axi_awcache),
++    .s_axi_awid                       (axi_awid),
++    .s_axi_awlen                      (axi_awlen),
++    .s_axi_awlock                     (axi_awlock),
++    .s_axi_awprot                     (axi_awprot),
++    .s_axi_awqos                      (axi_awqos),
++    .s_axi_awready                    (axi_awready),
++    .s_axi_awsize                     (axi_awsize),
++    .s_axi_awuser                     (axi_awuser),
++    .s_axi_awvalid                    (axi_awvalid),
++    .s_axi_bid                        (axi_bid),
++    .s_axi_bready                     (axi_bready),
++    .s_axi_bresp                      (axi_bresp),
++    .s_axi_bvalid                     (axi_bvalid),
++    .s_axi_rdata                      (axi_rdata),
++    .s_axi_rid                        (axi_rid),
++    .s_axi_rlast                      (axi_rlast),
++    .s_axi_rready                     (axi_rready),
++    .s_axi_rresp                      (axi_rresp),
++    .s_axi_rvalid                     (axi_rvalid),
++    .s_axi_wdata                      (axi_wdata),
++    .s_axi_wlast                      (axi_wlast),
++    .s_axi_wready                     (axi_wready),
++    .s_axi_wstrb                      (axi_wstrb),
++    .s_axi_wuser                      (axi_wuser),
++    .s_axi_wvalid                     (axi_wvalid),
 +
 +    .s_axis_qdma_h2c_tvalid           (axis_qdma_h2c_tvalid),
 +    .s_axis_qdma_h2c_tdata            (axis_qdma_h2c_tdata),
@@ -6134,13 +6223,14 @@ index 572e191..1c31389 100644
 -    .axi_clk              (axis_aclk),
 -    .axi_resetn           (sys_cfg_powerup_rstn),
 -    .hbm_ref_clk          (ref_clk_100mhz)
-+    .axi_clk                          (axis_aclk),
++    .axis_aclk                        (axis_aclk[0]),
++    .axil_aclk                        (axil_aclk[0]),
 +    .axi_rstn                         (sys_cfg_powerup_rstn),
 +    .hbm_ref_clk                      (ref_clk_100mhz)
    );
  
    generate for (genvar i = 0; i < NUM_CMAC_PORT; i++) begin: cmac_port
-@@ -958,40 +1037,40 @@ module open_nic_shell #(
+@@ -958,40 +1038,40 @@ module open_nic_shell #(
      .NUM_QDMA      (NUM_QDMA),
      .NUM_CMAC_PORT (NUM_CMAC_PORT)
    ) box_250mhz_inst (
