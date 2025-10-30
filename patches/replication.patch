@@ -22,7 +22,7 @@ index 0000000..b50577f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/cuckoo_hash.sv b/src/hbm_subsystem/cuckoo_hash.sv
 new file mode 100644
-index 0000000..fa260e4
+index 0000000..2b0254d
 --- /dev/null
 +++ b/src/hbm_subsystem/cuckoo_hash.sv
 @@ -0,0 +1,622 @@
@@ -408,9 +408,9 @@ index 0000000..fa260e4
 +      ERROR: begin
 +        state_next = IDLE;
 +        // Assume meta fifo is not full
-+        metadata_out_valid = 1'b1;
-+        metadata_out       = metadata_buf;
-+        // FIXME: Read errors will block everything
++        metadata_out_valid  = 1'b1;
++        metadata_out        = metadata_buf;
++        metadata_out.opcode = READ_NOT_FOUND;
 +      end
 +    endcase
 +  end
@@ -650,9 +650,469 @@ index 0000000..fa260e4
 +endmodule
 diff --git a/src/hbm_subsystem/election_engine.sv b/src/hbm_subsystem/election_engine.sv
 new file mode 100644
-index 0000000..b6a518a
+index 0000000..e261f0c
 --- /dev/null
 +++ b/src/hbm_subsystem/election_engine.sv
+@@ -0,0 +1,250 @@
++`timescale 1ns/1ps
++
++import metadata_pkg::*; 
++
++module election_engine #(
++  parameter int MAX_NODES      = 32,
++  parameter int PTR_WIDTH      = $clog2(MAX_NODES),
++  parameter int FIFO_DEPTH     = 16,
++  parameter int TIMER_WIDTH    = 30,  // ~4.2 s
++  parameter int SEED           = 32'hdeadbeef,
++  parameter logic [TIMER_WIDTH-1:0] TAP_MASK = 30'h60000000,
++  parameter int USE_CONTROLLER = 1
++) (
++  input  logic        axi_aclk,
++  input  logic        axi_rstn,
++
++  input  logic [31:0] s_axil_awaddr,
++  input  logic        s_axil_awvalid,
++  output logic        s_axil_awready,
++  input  logic [31:0] s_axil_wdata,
++  input  logic  [7:0] s_axil_wstrb,
++  input  logic        s_axil_wvalid,
++  output logic        s_axil_wready,
++  output logic  [1:0] s_axil_bresp,
++  output logic        s_axil_bvalid,
++  input  logic        s_axil_bready,
++  input  logic [31:0] s_axil_araddr,
++  input  logic        s_axil_arvalid,
++  output logic        s_axil_arready,
++  output logic [31:0] s_axil_rdata,
++  output logic  [1:0] s_axil_rresp,
++  output logic        s_axil_rvalid,
++  input  logic        s_axil_rready,
++
++  input  st_metadata  metadata_in,
++  input  logic        metadata_in_valid,
++
++  output st_metadata  metadata_out,
++  output logic        metadata_out_valid,
++
++  output logic        is_leader
++);
++
++localparam logic [7:0] BROADCAST_ID = '1;
++localparam logic [7:0] LEADER_ID    = '0;
++
++logic           [7:0] term;
++logic           [7:0] leader;
++logic           [7:0] num_sent;
++logic [PTR_WIDTH-1:0] num_nodes;
++logic [PTR_WIDTH-1:0] send_index;
++logic          [31:0] send_ip;
++logic          [47:0] send_mac;
++logic           [7:0] send_seq;
++st_metadata           received_metadata;
++logic                 received_process;
++logic                 received_empty;
++logic          [31:0] received_ip;
++logic [PTR_WIDTH-1:0] received_index;
++logic           [7:0] received_seq;
++logic                 axi_write_ready;
++logic                 axi_read_ready;
++logic                 broadcast;
++logic                 update_send;
++logic                 update_received;
++st_election_command   send_command;
++st_election_command   received_command;
++
++assign axi_read_ready   = s_axil_arvalid && s_axil_rready;
++assign axi_write_ready  = s_axil_awvalid && s_axil_wvalid;
++assign is_leader        = leader == LEADER_ID;
++assign broadcast        = send_command.node_id == BROADCAST_ID;
++assign send_index       = broadcast ? num_sent : send_command.node_id;
++assign received_ip      = received_metadata.ip;
++
++// AXI Slave logic
++generate
++  if (!USE_CONTROLLER) begin
++    always_ff @(posedge axi_aclk) begin
++      s_axil_bvalid   <= 1'b0;
++      s_axil_rvalid   <= 1'b0;
++      if (!axi_rstn) begin
++        s_axil_awready  <= 1'b0;
++        s_axil_wready   <= 1'b0;
++        s_axil_bresp    <= 2'b00;
++        s_axil_arready  <= 1'b0;
++        s_axil_rdata    <= '0;
++        s_axil_rresp    <= 2'b00;
++      end 
++      else begin
++        s_axil_awready <= axi_write_ready;
++        s_axil_wready  <= axi_write_ready;
++        s_axil_arready <= axi_read_ready;
++        if (axi_write_ready) begin
++          s_axil_bvalid   <= 1'b1;
++          case (s_axil_awaddr)
++            32'h000: send_command <= s_axil_wdata;
++            32'h008: leader       <= s_axil_wdata;
++            32'h00C: term         <= s_axil_wdata;
++            default:;
++          endcase
++        end
++        if (axi_read_ready) begin
++          s_axil_rvalid <= 1'b1;
++          case (s_axil_araddr)
++            32'h004: s_axil_rdata <= received_command;
++            32'h008: s_axil_rdata <= leader;
++            32'h00C: s_axil_rdata <= term;
++            32'h010: s_axil_rdata <= num_nodes;
++            default: s_axil_rdata <= '0;
++          endcase
++        end
++      end
++    end
++  end
++  else begin
++    election_engine_controller #(
++      .TIMER_WIDTH      (TIMER_WIDTH),
++      .TAP_MASK         (TAP_MASK),
++      .SEED             (SEED),
++      .BROADCAST_ID     (BROADCAST_ID),
++      .LEADER_ID        (LEADER_ID)
++    ) election_engine_controller_inst (
++      .axi_aclk         (axi_aclk),
++      .axi_rstn         (axi_rstn),
++      .num_nodes        (num_nodes),
++      .received_command (received_command),
++      .send_command     (send_command),
++      .leader           (leader),
++      .term             (term)
++    );
++  end
++endgenerate
++
++// Receiver
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn) begin
++    received_command <= '0;
++    received_seq     <= 1;
++    received_process <= 1'b0;
++    update_received  <= 1'b0;
++  end
++  // Wait one cycle for index BRAM
++  else if (!received_empty) begin
++    received_process <= 1'b1;
++    update_received  <= 1'b1;
++  end
++  else if (update_received) begin
++    received_seq                     <= received_seq + 1;
++    received_command.sequence_number <= received_seq;
++    received_command.node_id         <= received_index;
++    received_command.message_id      <= received_metadata.index;
++    received_command.opcode          <= received_metadata.opcode;
++    received_process                 <= 1'b0;
++    update_received                  <= 1'b0;
++  end
++end
++
++// Sender
++always_ff @(posedge axi_aclk) begin
++  metadata_out_valid <= 1'b0;
++  if (!axi_rstn) begin
++    metadata_out <= 0;
++    num_sent     <= 0;
++    send_seq     <= 1;
++    update_send  <= 1'b1;
++  end
++  // Wait one cycle for address BRAM
++  else if (send_command.sequence_number != send_seq) begin
++    update_send <= 1'b1;
++    send_seq    <= send_command.sequence_number;
++    if (broadcast) begin
++      num_sent <= num_sent + 1;
++    end
++  end
++  else if (update_send) begin
++    metadata_out_valid  <= 1'b1;
++    metadata_out.ip     <= send_ip;
++    metadata_out.mac    <= send_mac;
++    metadata_out.opcode <= send_command.opcode;
++    metadata_out.index  <= send_command.message_id;
++    metadata_out.key    <= 0;
++    if (broadcast) begin
++      num_sent <= num_sent + 1;
++      if (num_sent == num_nodes - 1) begin
++        num_sent    <= 0;
++        update_send <= 1'b0;
++      end
++    end
++    else begin  // !broadcast
++      update_send <= 1'b0;
++    end
++  end
++end
++
++nodes_table #( 
++  .TABLE_SIZE          (MAX_NODES)
++) nodes_table_inst (
++  .aclk                (axi_aclk),
++  .rstn                (axi_rstn),
++  .metadata_valid      (metadata_in_valid),
++  .metadata            (metadata_in),
++  .address_table_index (send_index),
++  .address_table_ip    (send_ip),
++  .address_table_mac   (send_mac),
++  .index_table_ip      (received_ip),
++  .index_table_index   (received_index),
++  .num_nodes           (num_nodes)
++);
++
++// Received packets FIFO
++xpm_fifo_sync #(
++  .DOUT_RESET_VALUE    ("0"),
++  .ECC_MODE            ("no_ecc"),
++  .FIFO_MEMORY_TYPE    ("auto"),
++  .FIFO_READ_LATENCY   (1),
++  .FIFO_WRITE_DEPTH    (FIFO_DEPTH),
++  .PROG_FULL_THRESH    (FIFO_DEPTH-5),
++  .READ_DATA_WIDTH     (METADATA_WIDTH),
++  .READ_MODE           ("fwft"),
++  .WRITE_DATA_WIDTH    (METADATA_WIDTH)
++) receiver_fifo (
++  .wr_en               (metadata_in_valid),
++  .din                 (metadata_in),
++  .wr_ack              (),
++  .rd_en               (received_process),
++  .data_valid          (),
++  .dout                (received_metadata),
++  .wr_data_count       (),
++  .rd_data_count       (),
++  .empty               (received_empty),
++  .full                (),
++  .almost_empty        (),
++  .almost_full         (),
++  .overflow            (),
++  .underflow           (),
++  .prog_empty          (),
++  .prog_full           (),
++  .sleep               (1'b0),
++  .sbiterr             (),
++  .dbiterr             (),
++  .injectsbiterr       (1'b0),
++  .injectdbiterr       (1'b0),
++  .wr_clk              (axi_aclk),
++  .rst                 (~axi_rstn),
++  .rd_rst_busy         (),
++  .wr_rst_busy         ()
++);
++
++endmodule
+diff --git a/src/hbm_subsystem/election_engine_controller.sv b/src/hbm_subsystem/election_engine_controller.sv
+new file mode 100644
+index 0000000..fc1658b
+--- /dev/null
++++ b/src/hbm_subsystem/election_engine_controller.sv
+@@ -0,0 +1,197 @@
++`timescale 1ns/1ps
++
++import metadata_pkg::*; 
++
++module election_engine_controller #(
++  parameter int                     MAX_NODES    = 32,
++  parameter int                     PTR_WIDTH    = $clog2(MAX_NODES),
++  parameter int                     TIMER_WIDTH  = 25,  // ~134ms
++  parameter int                     SEED         = 32'hdeadbeef,
++  parameter logic [TIMER_WIDTH-1:0] TAP_MASK     = 25'h1200000,
++  parameter logic             [7:0] BROADCAST_ID = '1,
++  parameter logic             [7:0] LEADER_ID    = '0
++) (
++  input  logic                 axi_aclk,
++  input  logic                 axi_rstn,
++
++  input  logic [PTR_WIDTH-1:0] num_nodes,
++  output logic           [7:0] leader,
++  output logic           [7:0] term,
++  input  st_election_command   received_command,
++  output st_election_command   send_command
++);
++  
++typedef enum logic [7:0] { 
++  FOLLOWER,
++  CANDIDATE,
++  LEADER
++} role_e;
++
++st_election_command     send_command_next;
++role_e                  role, role_next;
++logic             [7:0] received_seq, received_seq_next;
++logic             [7:0] send_seq, send_seq_next;
++logic             [7:0] term_next;
++logic             [7:0] leader_next;
++logic             [7:0] votes, votes_next;
++logic [TIMER_WIDTH-1:0] timer_max;
++logic [TIMER_WIDTH-1:0] timer;
++logic [TIMER_WIDTH-1:0] random;
++logic                   timeout;
++logic                   reset_timer;
++
++// RAFT Leader Election
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn) begin
++    role         <= FOLLOWER;
++    term         <= 0;
++    leader       <= 1;
++    votes        <= 1;
++    received_seq <= 0;
++    send_seq     <= 0;
++    send_command <= 0;
++    send_command.sequence_number <= 1;
++  end
++  else begin
++    role         <= role_next;
++    term         <= term_next;
++    leader       <= leader_next;
++    received_seq <= received_seq_next;
++    send_seq     <= send_seq_next;
++    send_command <= send_command_next;
++    votes        <= votes_next;
++  end
++end
++
++always_comb begin
++  role_next         = role;
++  term_next         = term;
++  leader_next       = leader;
++  votes_next        = votes;
++  received_seq_next = received_seq;
++  send_seq_next     = send_seq;
++  reset_timer       = 1'b0;
++  send_command_next = send_command;
++  case (role)
++    FOLLOWER: begin
++      if (timeout && num_nodes != 1) begin
++        term_next = term + 1;
++        role_next = CANDIDATE;
++      end
++      else if (received_command.sequence_number != received_seq) begin
++        reset_timer       = 1'b1;
++        received_seq_next = received_command.sequence_number;
++        send_seq_next     = send_seq + 1;
++        case (received_command.opcode)
++          HEARTBEAT: begin
++            send_command_next.sequence_number = send_seq;
++            send_command_next.message_id      = received_command.message_id;
++            send_command_next.node_id         = received_command.node_id;
++            send_command_next.opcode          = HEARTBEAT_ACK;
++          end
++          VOTE_REQUEST: begin
++            if (received_command.message_id > term) begin
++              term_next                         = received_command.message_id;
++              leader_next                       = received_command.node_id;
++              send_command_next.sequence_number = send_seq;
++              send_command_next.message_id      = received_command.message_id;
++              send_command_next.node_id         = received_command.node_id;
++              send_command_next.opcode          = VOTE;
++            end
++          end
++        endcase
++      end
++    end
++    CANDIDATE: begin
++      if (timeout) begin
++        reset_timer                       = 1'b1;
++        send_seq_next                     = send_seq + 1;
++        send_command_next.sequence_number = send_seq;
++        send_command_next.message_id      = term;
++        send_command_next.node_id         = BROADCAST_ID;
++        send_command_next.opcode          = VOTE_REQUEST;
++      end
++      else if (received_command.sequence_number != received_seq) begin
++        received_seq_next = received_command.sequence_number;
++        send_seq_next     = send_seq + 1;
++        case (received_command.opcode)
++          HEARTBEAT, VOTE_REQUEST: begin
++            if (received_command.message_id >= term) begin
++              reset_timer                       = 1'b1;
++              role_next                         = FOLLOWER;
++              term_next                         = received_command.message_id;
++              leader_next                       = received_command.node_id;
++              send_command_next.sequence_number = send_seq;
++              send_command_next.message_id      = received_command.message_id;
++              send_command_next.node_id         = received_command.node_id;
++              if (received_command.opcode == VOTE_REQUEST)
++                send_command_next.opcode = VOTE;
++              else
++                send_command_next.opcode = HEARTBEAT_ACK;
++            end
++          end
++          VOTE: begin
++            votes_next = votes + 1;
++            if (votes + 1 == num_nodes / 2 + 1) begin
++              reset_timer                       = 1'b1;
++              votes_next                        = 0;
++              role_next                         = LEADER;
++              leader_next                       = LEADER_ID;
++              send_seq_next                     = send_seq + 1;
++              send_command_next.sequence_number = send_seq;
++              send_command_next.message_id      = term;
++              send_command_next.node_id         = BROADCAST_ID;
++              send_command_next.opcode          = HEARTBEAT;
++            end
++          end
++        endcase
++      end
++    end
++    LEADER: begin
++      if (timeout) begin
++        reset_timer                       = 1'b1;
++        send_seq_next                     = send_seq + 1;
++        send_command_next.sequence_number = send_seq;
++        send_command_next.message_id      = term;
++        send_command_next.node_id         = BROADCAST_ID;
++        send_command_next.opcode          = HEARTBEAT;
++      end
++    end
++  endcase
++end
++
++// Timer 
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn || reset_timer) begin
++    timer   <= 0;
++    timeout <= 1'b0;
++  end
++  else begin
++    timer   <= timer + 1;
++    timeout <= 1'b0;
++    if (timer == timer_max) begin
++      timer   <= timer;
++      timeout <= 1'b1;
++    end
++  end
++end
++
++// Galois LSFR
++always_ff @(posedge axi_aclk) begin
++  if (!axi_rstn) begin
++    random    <= SEED;
++    timer_max <= SEED;
++  end
++  else begin
++    timer_max <= {1'b1, random[TIMER_WIDTH-2:0]};
++    if (reset_timer) begin
++      random <= (random >> 1) ^ (random[0] ? TAP_MASK : {TIMER_WIDTH{1'b0}});
++    end
++    // Leader should send heartbeats more often than followers expect to receive them
++    if (role == LEADER) begin
++      timer_max <= {1'b1, random[TIMER_WIDTH-2:0]} >> 2;
++    end
++  end
++end
++
++endmodule
+\ No newline at end of file
+diff --git a/src/hbm_subsystem/election_engine_old.sv b/src/hbm_subsystem/election_engine_old.sv
+new file mode 100644
+index 0000000..b6a518a
+--- /dev/null
++++ b/src/hbm_subsystem/election_engine_old.sv
 @@ -0,0 +1,358 @@
 +`timescale 1ns/1ps
 +
@@ -1637,7 +2097,7 @@ index 97fedbc..1f9a435 100644
  
    # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..2e15a61 100644
+index 4571b97..cc84b37 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
 @@ -1,4 +1,12 @@
@@ -1654,10 +2114,28 @@ index 4571b97..2e15a61 100644
    input   [63:0] s_axi_araddr,
    input    [1:0] s_axi_arburst,
    input    [3:0] s_axi_arcache,
-@@ -40,55 +48,635 @@ module hbm_subsystem (
+@@ -40,55 +48,670 @@ module hbm_subsystem (
    input   [63:0] s_axi_wuser,
    input          s_axi_wvalid,
  
++  input   [31:0] s_axil_awaddr,
++  input          s_axil_awvalid,
++  output         s_axil_awready,
++  input   [31:0] s_axil_wdata,
++  input    [7:0] s_axil_wstrb,
++  input          s_axil_wvalid,
++  output         s_axil_wready,
++  output   [1:0] s_axil_bresp,
++  output         s_axil_bvalid,
++  input          s_axil_bready,
++  input   [31:0] s_axil_araddr,
++  input          s_axil_arvalid,
++  output         s_axil_arready,
++  output  [31:0] s_axil_rdata,
++  output   [1:0] s_axil_rresp,
++  output         s_axil_rvalid,
++  input          s_axil_rready,
++
 +  input          s_axis_qdma_h2c_tvalid,
 +  input  [511:0] s_axis_qdma_h2c_tdata,
 +  input   [63:0] s_axis_qdma_h2c_tkeep,
@@ -1983,6 +2461,23 @@ index 4571b97..2e15a61 100644
 +  .HASH_WIDTH                (HASH_WIDTH),
 +  .HASH_MATRIX               (HASH_MATRIX)
 +) replication_subsystem_inst (
++  .s_axil_awvalid            (s_axil_awvalid),
++  .s_axil_awaddr             (s_axil_awaddr),
++  .s_axil_awready            (s_axil_awready),
++  .s_axil_wvalid             (s_axil_wvalid),
++  .s_axil_wdata              (s_axil_wdata),
++  .s_axil_wready             (s_axil_wready),
++  .s_axil_bvalid             (s_axil_bvalid),
++  .s_axil_bresp              (s_axil_bresp),
++  .s_axil_bready             (s_axil_bready),
++  .s_axil_arvalid            (s_axil_arvalid),
++  .s_axil_araddr             (s_axil_araddr),
++  .s_axil_arready            (s_axil_arready),
++  .s_axil_rvalid             (s_axil_rvalid),
++  .s_axil_rdata              (s_axil_rdata),
++  .s_axil_rresp              (s_axil_rresp),
++  .s_axil_rready             (s_axil_rready),
++
 +  .s_axis_tvalid             (axis_filter_to_replication_tvalid),
 +  .s_axis_tdata              (axis_filter_to_replication_tdata),
 +  .s_axis_tkeep              (axis_filter_to_replication_tkeep),
@@ -3555,10 +4050,10 @@ index 0000000..291d34f
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/metadata.sv b/src/hbm_subsystem/metadata.sv
 new file mode 100644
-index 0000000..de2bfb7
+index 0000000..36fa4ce
 --- /dev/null
 +++ b/src/hbm_subsystem/metadata.sv
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,38 @@
 +package metadata_pkg;
 +
 +parameter int KEY_WIDTH = 64;
@@ -3587,13 +4082,20 @@ index 0000000..de2bfb7
 +  logic [KEY_WIDTH-1:0] key;
 +} st_metadata;
 +
++typedef struct packed {
++  logic [7:0] sequence_number;
++  logic [7:0] node_id;
++  logic [7:0] message_id;
++  opcode_e    opcode;
++} st_election_command;
++
 +parameter int METADATA_WIDTH = $bits(st_metadata);
 +
 +endpackage
 \ No newline at end of file
 diff --git a/src/hbm_subsystem/nodes_table.sv b/src/hbm_subsystem/nodes_table.sv
 new file mode 100644
-index 0000000..9d29faa
+index 0000000..6208b7a
 --- /dev/null
 +++ b/src/hbm_subsystem/nodes_table.sv
 @@ -0,0 +1,81 @@
@@ -3609,10 +4111,14 @@ index 0000000..9d29faa
 +  input  logic                 metadata_valid,
 +  input  st_metadata           metadata,
 +
-+  input  logic [PTR_WIDTH-1:0] index,
-+  output logic [PTR_WIDTH-1:0] num_nodes,
-+  output logic          [31:0] ip,
-+  output logic          [47:0] mac
++  input  logic [PTR_WIDTH-1:0] address_table_index,
++  output logic          [31:0] address_table_ip,
++  output logic          [47:0] address_table_mac,
++
++  input  logic          [31:0] index_table_ip,
++  output logic [PTR_WIDTH-1:0] index_table_index,
++
++  output logic [PTR_WIDTH-1:0] num_nodes
 +);
 +
 +localparam int TABLE_WIDTH = 32 + 48;
@@ -3623,56 +4129,52 @@ index 0000000..9d29faa
 +  return h[PTR_WIDTH-1:0];
 +endfunction
 +
-+// FIXME: Collisions are never taken care of
-+logic [TABLE_SIZE-1:0] is_in_network;
-+logic  [PTR_WIDTH-1:0] hashed_ip;
 +
 +(* ram_style = "block" *)
-+logic [TABLE_WIDTH-1:0] ip_table [TABLE_SIZE];
-+logic   [PTR_WIDTH-1:0] read_ptr,  write_ptr;
++logic [TABLE_WIDTH-1:0] address_table [TABLE_SIZE];
++logic   [PTR_WIDTH-1:0] read_ptr, write_ptr;
 +logic [TABLE_WIDTH-1:0] read_data, write_data;
 +logic                   write_en;
++logic   [PTR_WIDTH-1:0] index_table [TABLE_SIZE];
++logic   [PTR_WIDTH-1:0] hashed_meta_ip;
++logic   [PTR_WIDTH-1:0] hashed_index_ip;
 +
-+assign hashed_ip = hash(metadata.ip);
-+assign read_ptr  = index;
-+assign ip        = read_data[TABLE_WIDTH-1-:32];
-+assign mac       = read_data[TABLE_WIDTH-1-32-:48];
++assign read_ptr          = address_table_index;
++assign address_table_ip  = read_data[TABLE_WIDTH-1-:32];
++assign address_table_mac = read_data[TABLE_WIDTH-1-32-:48];
++assign hashed_meta_ip    = hash(metadata.ip);
++assign hashed_index_ip   = hash(index_table_ip);
 +
-+// initial begin
-+//   for (int i = 0; i < TABLE_SIZE; i++) begin
-+//     ip_table[i] = '0;
-+//   end
-+// end
-+
-+// IP table logic
++// Infer BRAM for address_table
 +always_ff @(posedge aclk) begin
 +  if (!rstn) begin
 +    read_data <= 0;
 +  end
 +  else begin
-+    read_data <= ip_table[read_ptr];
++    read_data <= address_table[read_ptr];
 +    if (write_en) begin
-+      ip_table[write_ptr] <= write_data;
++      address_table[write_ptr] <= write_data;
 +    end
 +  end
 +end
 +
 +always_ff @(posedge aclk) begin
 +  if (!rstn) begin
-+    is_in_network <= '0;
-+    num_nodes     <= 1;
-+    write_en      <= 1'b0;
-+    write_ptr     <= '0;
-+    write_data    <= '0;
++    index_table <= '{default: '0};
++    num_nodes   <= 1;
++    write_ptr   <= '0;
++    write_en    <= 1'b0;
++    write_data  <= '0;
 +  end
 +  else begin
-+    write_en <= 1'b0;
-+    if (metadata_valid && !is_in_network[hashed_ip]) begin
-+      is_in_network[hashed_ip] <= 1'b1;
-+      num_nodes  <= num_nodes + 1;
-+      write_en   <= 1'b1;
-+      write_ptr  <= num_nodes - 1;
-+      write_data <= {metadata.ip, metadata.mac};
++    index_table_index <= index_table[hashed_index_ip];
++    write_en          <= 1'b0;
++    if (metadata_valid && index_table[hashed_meta_ip] == 0) begin
++      index_table[hashed_meta_ip] <= num_nodes;
++      num_nodes                   <= num_nodes + 1;
++      write_ptr                   <= num_nodes - 1;
++      write_en                    <= 1'b1;
++      write_data                  <= {metadata.ip, metadata.mac};
 +    end
 +  end
 +end
@@ -4253,10 +4755,10 @@ index 0000000..0c9b444
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..447e299
+index 0000000..4df2c0c
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
-@@ -0,0 +1,664 @@
+@@ -0,0 +1,677 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*;
@@ -4265,9 +4767,7 @@ index 0000000..447e299
 +  parameter int          MAX_NODES  = 32,
 +  parameter int          DATA_WIDTH = 512,
 +  parameter int          KEEP_WIDTH = DATA_WIDTH / 8,
-+  parameter int          FIFO_DEPTH = 16,
-+  parameter logic [31:0] NODE_IP    = 0,
-+  parameter logic [47:0] NODE_MAC   = 0
++  parameter int          FIFO_DEPTH = 16
 +) (
 +  input  logic axis_clk,
 +  input  logic axis_rstn,
@@ -4703,6 +5203,17 @@ index 0000000..447e299
 +                mem_meta_rd_en = 1'b1;
 +              end
 +            end
++            READ_NOT_FOUND: begin
++              metadata_out_valid  = 1'b1;
++              metadata_out        = mem_meta_out;
++              metadata_out.opcode = READ_NOT_FOUND;
++
++              if (m_axis_tready) begin
++                out_busy_next[1] = 1'b0;
++                mem_meta_rd_en   = 1'b1;
++                mem_fifo_rd_en   = 1'b1;
++              end
++            end
 +            WRITE: begin
 +              if (!is_leader) begin
 +                metadata_out_valid  = 1'b1;
@@ -4743,19 +5254,23 @@ index 0000000..447e299
 +end
 +
 +// FIXME: Needs to receive a memory operation before table is populated 
-+nodes_table #( 
-+  .TABLE_SIZE     (MAX_NODES)
++nodes_table #(
++  .TABLE_SIZE          (MAX_NODES)
 +) nodes_table_inst (
-+  .aclk           (axis_clk),
-+  .rstn           (axis_rstn),
++  .aclk                (axis_clk),
++  .rstn                (axis_rstn),
 +
-+  .metadata_valid (metadata_in_valid),
-+  .metadata       (metadata_in),
++  .metadata_valid      (metadata_in_valid),
++  .metadata            (metadata_in),
 +
-+  .num_nodes      (num_nodes),
-+  .index          (table_index),
-+  .ip             (table_ip),
-+  .mac            (table_mac)
++  .address_table_index (table_index),
++  .address_table_ip    (table_ip),
++  .address_table_mac   (table_mac),
++
++  .index_table_index   (),
++  .index_table_ip      ('0),
++
++  .num_nodes           (num_nodes)
 +);
 +
 +logic net_fifo_wr_en;
@@ -4923,10 +5438,10 @@ index 0000000..447e299
 +endmodule
 diff --git a/src/hbm_subsystem/replication_subsystem.sv b/src/hbm_subsystem/replication_subsystem.sv
 new file mode 100644
-index 0000000..c039a06
+index 0000000..00d7af2
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_subsystem.sv
-@@ -0,0 +1,431 @@
+@@ -0,0 +1,452 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*;
@@ -5021,7 +5536,25 @@ index 0000000..c039a06
 +  output logic                  m_axi_wlast    [NUM_HASHES],
 +  input  logic                  m_axi_wready   [NUM_HASHES],
 +  output logic           [31:0] m_axi_wstrb    [NUM_HASHES],
-+  output logic                  m_axi_wvalid   [NUM_HASHES]
++  output logic                  m_axi_wvalid   [NUM_HASHES],
++
++  input  logic           [31:0] s_axil_awaddr,
++  input  logic                  s_axil_awvalid,
++  output logic                  s_axil_awready,
++  input  logic           [31:0] s_axil_wdata,
++  input  logic            [7:0] s_axil_wstrb,
++  input  logic                  s_axil_wvalid,
++  output logic                  s_axil_wready,
++  output logic            [1:0] s_axil_bresp,
++  output logic                  s_axil_bvalid,
++  input  logic                  s_axil_bready,
++  input  logic           [31:0] s_axil_araddr,
++  input  logic                  s_axil_arvalid,
++  output logic                  s_axil_arready,
++  output logic           [31:0] s_axil_rdata,
++  output logic            [1:0] s_axil_rresp,
++  output logic                  s_axil_rvalid,
++  input  logic                  s_axil_rready
 +);
 +
 +logic         axis_engine_to_memory_tvalid;
@@ -5042,18 +5575,18 @@ index 0000000..c039a06
 +logic         axis_engine_to_deparser_tlast;
 +logic         axis_engine_to_deparser_tready;
 +
-+st_metadata replication_metadata_in;
-+logic       replication_metadata_in_valid;
-+st_metadata replication_metadata_out;
-+logic       replication_metadata_out_valid;
-+st_metadata election_metadata_in;
-+logic       election_metadata_in_valid;
-+st_metadata election_metadata_out;
-+logic       election_metadata_out_valid;
-+st_metadata memory_metadata_in;
-+logic       memory_metadata_in_valid;
-+st_metadata memory_metadata_out;
-+logic       memory_metadata_out_valid;
++st_metadata   replication_metadata_in;
++logic         replication_metadata_in_valid;
++st_metadata   replication_metadata_out;
++logic         replication_metadata_out_valid;
++st_metadata   election_metadata_in;
++logic         election_metadata_in_valid;
++st_metadata   election_metadata_out;
++logic         election_metadata_out_valid;
++st_metadata   memory_metadata_in;
++logic         memory_metadata_in_valid;
++st_metadata   memory_metadata_out;
++logic         memory_metadata_out_valid;
 +
 +logic is_leader;
 +
@@ -5082,7 +5615,7 @@ index 0000000..c039a06
 +logic       replication_metadata_ready;
 +logic       replication_metadata_empty;
 +
-+
++// TODO: Filter opcodes within each module
 +metadata_filter metadata_filter_inst (
 +  .s_axis_tvalid  (metadata_in_valid), 
 +  .s_axis_tdata   (metadata_in),
@@ -5113,9 +5646,7 @@ index 0000000..c039a06
 +replication_engine #(
 +  .MAX_NODES                 (MAX_NODES),
 +  .DATA_WIDTH                (DATA_WIDTH),
-+  .FIFO_DEPTH                (FIFO_DEPTH),
-+  .NODE_IP                   (NODE_IP),
-+  .NODE_MAC                  (NODE_MAC)
++  .FIFO_DEPTH                (FIFO_DEPTH)
 +) replication_engine_inst    (
 +  .axis_clk                  (axi_clk),
 +  .axis_rstn                 (axi_rstn),
@@ -5160,32 +5691,37 @@ index 0000000..c039a06
 +);
 +
 +election_engine #(
++  .MAX_NODES                 (MAX_NODES),
 +  .FIFO_DEPTH                (FIFO_DEPTH),
-+  .TIMER_WIDTH               (25),
-+  .SEED                      (32'hdeadbeef),
-+  .TAP_MASK                  (25'h1200000),
-+  .NODE_IP                   (NODE_IP)
++`ifdef __simulation__
++  .TIMER_WIDTH               (10),
++  .TAP_MASK                  (10'b1000000000),
++`else
++  .TIMER_WIDTH               (TIMER_WIDTH),
++  .TAP_MASK                  (TAP_MASK),
++`endif
++  .SEED                      (SEED),
++  .USE_CONTROLLER            (1)
 +) election_engine_inst (
-+  .axi_aclk                 (axi_clk),
-+  .axi_rstn                 (axi_rstn),
++  .axi_aclk                  (axi_clk),
++  .axi_rstn                  (axi_rstn),
 +
-+  .s_axi_awaddr              ('0),
-+  .s_axi_awvalid             (1'b0),
-+  .s_axi_awready             (),
-+  .s_axi_wdata               ('0),
-+  .s_axi_wstrb               ('0),
-+  .s_axi_wvalid              (1'b0),
-+  .s_axi_wready              (),
-+  .s_axi_bresp               (),
-+  .s_axi_bvalid              (),
-+  .s_axi_bready              (1'b1),
-+  .s_axi_araddr              ('0),
-+  .s_axi_arvalid             (1'b0),
-+  .s_axi_arready             (),
-+  .s_axi_rdata               (),
-+  .s_axi_rresp               (),
-+  .s_axi_rvalid              (),
-+  .s_axi_rready              (1'b1),
++  .s_axil_awvalid            (s_axil_awvalid),
++  .s_axil_awaddr             (s_axil_awaddr),
++  .s_axil_awready            (s_axil_awready),
++  .s_axil_wvalid             (s_axil_wvalid),
++  .s_axil_wdata              (s_axil_wdata),
++  .s_axil_wready             (s_axil_wready),
++  .s_axil_bvalid             (s_axil_bvalid),
++  .s_axil_bresp              (s_axil_bresp),
++  .s_axil_bready             (s_axil_bready),
++  .s_axil_arvalid            (s_axil_arvalid),
++  .s_axil_araddr             (s_axil_araddr),
++  .s_axil_arready            (s_axil_arready),
++  .s_axil_rvalid             (s_axil_rvalid),
++  .s_axil_rdata              (s_axil_rdata),
++  .s_axil_rresp              (s_axil_rresp),
++  .s_axil_rready             (s_axil_rready),
 +
 +  .metadata_in               (election_metadata_in),
 +  .metadata_in_valid         (election_metadata_in_valid),
@@ -5484,7 +6020,7 @@ index 0000000..b1b9d1d
 +}
 \ No newline at end of file
 diff --git a/src/open_nic_shell.sv b/src/open_nic_shell.sv
-index 572e191..36b2089 100644
+index 572e191..1c31389 100644
 --- a/src/open_nic_shell.sv
 +++ b/src/open_nic_shell.sv
 @@ -25,7 +25,10 @@ module open_nic_shell #(
@@ -5534,7 +6070,7 @@ index 572e191..36b2089 100644
    // Packet adapter interfaces to the box running at 250MHz
    wire     [NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tvalid;
    wire [512*NUM_CMAC_PORT-1:0] axis_adap_tx_250mhz_tdata;
-@@ -766,7 +788,11 @@ module open_nic_shell #(
+@@ -766,7 +788,28 @@ module open_nic_shell #(
    end: qdma_if
    endgenerate
  
@@ -5544,10 +6080,27 @@ index 572e191..36b2089 100644
 +    .NODE_IP              (NODE_IP),
 +    .NODE_MAC             (NODE_MAC)
 +  ) hbm_subsystem_inst (
++    .s_axil_awvalid       (axil_box0_awvalid),
++    .s_axil_awaddr        (axil_box0_awaddr),
++    .s_axil_awready       (axil_box0_awready),
++    .s_axil_wvalid        (axil_box0_wvalid),
++    .s_axil_wdata         (axil_box0_wdata),
++    .s_axil_wready        (axil_box0_wready),
++    .s_axil_bvalid        (axil_box0_bvalid),
++    .s_axil_bresp         (axil_box0_bresp),
++    .s_axil_bready        (axil_box0_bready),
++    .s_axil_arvalid       (axil_box0_arvalid),
++    .s_axil_araddr        (axil_box0_araddr),
++    .s_axil_arready       (axil_box0_arready),
++    .s_axil_rvalid        (axil_box0_rvalid),
++    .s_axil_rdata         (axil_box0_rdata),
++    .s_axil_rresp         (axil_box0_rresp),
++    .s_axil_rready        (axil_box0_rready),
++
      .s_axi_araddr         (axi_araddr),
      .s_axi_arburst        (axi_arburst),
      .s_axi_arcache        (axi_arcache),
-@@ -807,10 +833,46 @@ module open_nic_shell #(
+@@ -807,10 +850,46 @@ module open_nic_shell #(
      .s_axi_wstrb          (axi_wstrb),
      .s_axi_wuser          (axi_wuser),
      .s_axi_wvalid         (axi_wvalid),
@@ -5597,10 +6150,27 @@ index 572e191..36b2089 100644
    );
  
    generate for (genvar i = 0; i < NUM_CMAC_PORT; i++) begin: cmac_port
-@@ -975,23 +1037,23 @@ module open_nic_shell #(
-     .s_axil_rresp                     (axil_box0_rresp),
-     .s_axil_rready                    (axil_box0_rready),
- 
+@@ -958,40 +1037,40 @@ module open_nic_shell #(
+     .NUM_QDMA      (NUM_QDMA),
+     .NUM_CMAC_PORT (NUM_CMAC_PORT)
+   ) box_250mhz_inst (
+-    .s_axil_awvalid                   (axil_box0_awvalid),
+-    .s_axil_awaddr                    (axil_box0_awaddr),
+-    .s_axil_awready                   (axil_box0_awready),
+-    .s_axil_wvalid                    (axil_box0_wvalid),
+-    .s_axil_wdata                     (axil_box0_wdata),
+-    .s_axil_wready                    (axil_box0_wready),
+-    .s_axil_bvalid                    (axil_box0_bvalid),
+-    .s_axil_bresp                     (axil_box0_bresp),
+-    .s_axil_bready                    (axil_box0_bready),
+-    .s_axil_arvalid                   (axil_box0_arvalid),
+-    .s_axil_araddr                    (axil_box0_araddr),
+-    .s_axil_arready                   (axil_box0_arready),
+-    .s_axil_rvalid                    (axil_box0_rvalid),
+-    .s_axil_rdata                     (axil_box0_rdata),
+-    .s_axil_rresp                     (axil_box0_rresp),
+-    .s_axil_rready                    (axil_box0_rready),
+-
 -    .s_axis_qdma_h2c_tvalid           (axis_qdma_h2c_tvalid),
 -    .s_axis_qdma_h2c_tdata            (axis_qdma_h2c_tdata),
 -    .s_axis_qdma_h2c_tkeep            (axis_qdma_h2c_tkeep),
@@ -5618,6 +6188,23 @@ index 572e191..36b2089 100644
 -    .m_axis_qdma_c2h_tuser_src        (axis_qdma_c2h_tuser_src),
 -    .m_axis_qdma_c2h_tuser_dst        (axis_qdma_c2h_tuser_dst),
 -    .m_axis_qdma_c2h_tready           (axis_qdma_c2h_tready),
++    .s_axil_awvalid                   (),
++    .s_axil_awaddr                    (),
++    .s_axil_awready                   (),
++    .s_axil_wvalid                    (),
++    .s_axil_wdata                     (),
++    .s_axil_wready                    (),
++    .s_axil_bvalid                    (),
++    .s_axil_bresp                     (),
++    .s_axil_bready                    (),
++    .s_axil_arvalid                   (),
++    .s_axil_araddr                    (),
++    .s_axil_arready                   (),
++    .s_axil_rvalid                    (),
++    .s_axil_rdata                     (),
++    .s_axil_rresp                     (),
++    .s_axil_rready                    (),
++
 +    .s_axis_qdma_h2c_tvalid           (axis_hbm_h2c_tvalid),
 +    .s_axis_qdma_h2c_tdata            (axis_hbm_h2c_tdata),
 +    .s_axis_qdma_h2c_tkeep            (axis_hbm_h2c_tkeep),
