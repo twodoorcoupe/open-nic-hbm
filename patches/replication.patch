@@ -906,10 +906,10 @@ index 0000000..e261f0c
 +endmodule
 diff --git a/src/hbm_subsystem/election_engine_controller.sv b/src/hbm_subsystem/election_engine_controller.sv
 new file mode 100644
-index 0000000..fc1658b
+index 0000000..e1aee25
 --- /dev/null
 +++ b/src/hbm_subsystem/election_engine_controller.sv
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,198 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*; 
@@ -991,11 +991,11 @@ index 0000000..fc1658b
 +        role_next = CANDIDATE;
 +      end
 +      else if (received_command.sequence_number != received_seq) begin
-+        reset_timer       = 1'b1;
 +        received_seq_next = received_command.sequence_number;
 +        send_seq_next     = send_seq + 1;
 +        case (received_command.opcode)
 +          HEARTBEAT: begin
++            reset_timer                       = 1'b1;
 +            send_command_next.sequence_number = send_seq;
 +            send_command_next.message_id      = received_command.message_id;
 +            send_command_next.node_id         = received_command.node_id;
@@ -1003,6 +1003,7 @@ index 0000000..fc1658b
 +          end
 +          VOTE_REQUEST: begin
 +            if (received_command.message_id > term) begin
++              reset_timer                       = 1'b1;
 +              term_next                         = received_command.message_id;
 +              leader_next                       = received_command.node_id;
 +              send_command_next.sequence_number = send_seq;
@@ -2097,7 +2098,7 @@ index 97fedbc..1f9a435 100644
  
    # Restore current instance
 diff --git a/src/hbm_subsystem/hbm_subsystem.sv b/src/hbm_subsystem/hbm_subsystem.sv
-index 4571b97..cc84b37 100644
+index 4571b97..27e0196 100644
 --- a/src/hbm_subsystem/hbm_subsystem.sv
 +++ b/src/hbm_subsystem/hbm_subsystem.sv
 @@ -1,4 +1,12 @@
@@ -2395,10 +2396,10 @@ index 4571b97..cc84b37 100644
 +logic         axis_deparser_to_arbiter_tlast;
 +logic         axis_deparser_to_arbiter_tready;
 +
-+st_metadata parser_metadata;
-+logic       parser_metadata_valid;
-+st_metadata replication_metadata;
-+logic       replication_metadata_valid;
++st_metadata   parser_metadata;
++logic         parser_metadata_valid;
++st_metadata   replication_metadata;
++logic         replication_metadata_valid;
 +
 +assign axis_dm_write_sts_tready = 1'b1;
 +assign axis_dm_read_sts_tready  = 1'b1;
@@ -4755,10 +4756,10 @@ index 0000000..0c9b444
 +) main;
 diff --git a/src/hbm_subsystem/replication_engine.sv b/src/hbm_subsystem/replication_engine.sv
 new file mode 100644
-index 0000000..4df2c0c
+index 0000000..75929b2
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_engine.sv
-@@ -0,0 +1,677 @@
+@@ -0,0 +1,680 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*;
@@ -4953,42 +4954,42 @@ index 0000000..4df2c0c
 +end
 +
 +always_comb begin
-+  net_state_next = net_state;
-+  mem_state_next = mem_state;
-+  net_meta_rd_en = 1'b0;
-+  net_fifo_rd_en = 1'b0;
-+  mem_meta_rd_en = 1'b0;
-+  mem_fifo_rd_en = 1'b0;
++  net_state_next         = net_state;
++  mem_state_next         = mem_state;
++  net_meta_rd_en         = 1'b0;
++  net_fifo_rd_en         = 1'b0;
++  mem_meta_rd_en         = 1'b0;
++  mem_fifo_rd_en         = 1'b0;
 +
-+  ack_id_next        = ack_id;
-+  out_busy_next      = out_busy;
-+  tag_written_next   = tag_written;
-+  nodes_count_next   = nodes_count;
-+  metadata_sent_next = metadata_sent;
-+  memory_delay_next  = memory_delay;
-+  rep_read_cnt_next  = rep_read_cnt;
-+  rep_write_ptr_next = rep_write_ptr;
-+  table_index_next   = table_index;
-+  replica_mem_write  = 0;
-+  ack_table_write    = 0;
-+  rep_read_ptr       = 0;
-+  ack_read_ptr       = 0;
-+  ack_write_ptr      = 0;
-+  rep_wr_en          = 1'b0;
-+  ack_wr_en          = 1'b0;
++  ack_id_next            = ack_id;
++  out_busy_next          = out_busy;
++  tag_written_next       = tag_written;
++  nodes_count_next       = nodes_count;
++  metadata_sent_next     = metadata_sent;
++  memory_delay_next      = memory_delay;
++  rep_read_cnt_next      = rep_read_cnt;
++  rep_write_ptr_next     = rep_write_ptr;
++  table_index_next       = table_index;
++  replica_mem_write      = 0;
++  ack_table_write        = 0;
++  rep_read_ptr           = 0;
++  ack_read_ptr           = 0;
++  ack_write_ptr          = 0;
++  rep_wr_en              = 1'b0;
++  ack_wr_en              = 1'b0;
 +
-+  m_axis_tvalid = 0;
-+  m_axis_tdata  = 0;
-+  m_axis_tkeep  = 0;
-+  m_axis_tlast  = 0;
++  m_axis_tvalid          = 0;
++  m_axis_tdata           = 0;
++  m_axis_tkeep           = 0;
++  m_axis_tlast           = 0;
 +
-+  metadata_out_valid = 0;
-+  metadata_out       = 0;
++  metadata_out_valid     = 0;
++  metadata_out           = 0;
 +
-+  m_axis_mem_tvalid = 0;
-+  m_axis_mem_tdata  = 0;
-+  m_axis_mem_tkeep  = 0;
-+  m_axis_mem_tlast  = 0;
++  m_axis_mem_tvalid      = 0;
++  m_axis_mem_tdata       = 0;
++  m_axis_mem_tkeep       = 0;
++  m_axis_mem_tlast       = 0;
 +
 +  metadata_mem_out_valid = 0;
 +  metadata_mem_out       = 0;
@@ -5055,6 +5056,7 @@ index 0000000..4df2c0c
 +              end
 +            end
 +          end
++          // FIXME: Maybe net_fifo_rd_en not needed? Parser should drop packets
 +          WRITE_ACK: begin
 +            ack_read_ptr  = net_meta_out.index;
 +            ack_write_ptr = net_meta_out.index;
@@ -5090,7 +5092,9 @@ index 0000000..4df2c0c
 +              end
 +            end
 +          end
-+          default:;
++          default: begin
++            net_meta_rd_en = 1'b1;
++          end
 +        endcase
 +      end
 +    end
@@ -5438,10 +5442,10 @@ index 0000000..4df2c0c
 +endmodule
 diff --git a/src/hbm_subsystem/replication_subsystem.sv b/src/hbm_subsystem/replication_subsystem.sv
 new file mode 100644
-index 0000000..00d7af2
+index 0000000..66065e7
 --- /dev/null
 +++ b/src/hbm_subsystem/replication_subsystem.sv
-@@ -0,0 +1,452 @@
+@@ -0,0 +1,438 @@
 +`timescale 1ns/1ps
 +
 +import metadata_pkg::*;
@@ -5615,20 +5619,6 @@ index 0000000..00d7af2
 +logic       replication_metadata_ready;
 +logic       replication_metadata_empty;
 +
-+// TODO: Filter opcodes within each module
-+metadata_filter metadata_filter_inst (
-+  .s_axis_tvalid  (metadata_in_valid), 
-+  .s_axis_tdata   (metadata_in),
-+  .s_axis_tdest   (metadata_in.opcode),
-+
-+  .m_axis_tvalid  ({election_metadata_in_valid, replication_metadata_in_valid}), 
-+  .m_axis_tdata   ({election_metadata_in, replication_metadata_in}),
-+  .m_axis_tdest   (),
-+
-+  .aclk           (axi_clk),
-+  .aresetn        (axi_rstn)
-+);
-+
 +metadata_arbiter metadata_arbiter_inst (
 +  .s_axis_tvalid  ({!election_metadata_empty, !replication_metadata_empty}), 
 +  .s_axis_tdata   ({election_metadata_out_reg, replication_metadata_out_reg}),
@@ -5657,8 +5647,8 @@ index 0000000..00d7af2
 +  .s_axis_tlast              (s_axis_tlast),
 +  .s_axis_tready             (s_axis_tready),
 +
-+  .metadata_in               (replication_metadata_in),
-+  .metadata_in_valid         (replication_metadata_in_valid),
++  .metadata_in               (metadata_in),
++  .metadata_in_valid         (metadata_in_valid),
 +
 +  .m_axis_tvalid             (axis_engine_to_deparser_tvalid),
 +  .m_axis_tdata              (axis_engine_to_deparser_tdata),
@@ -5723,8 +5713,8 @@ index 0000000..00d7af2
 +  .s_axil_rresp              (s_axil_rresp),
 +  .s_axil_rready             (s_axil_rready),
 +
-+  .metadata_in               (election_metadata_in),
-+  .metadata_in_valid         (election_metadata_in_valid),
++  .metadata_in               (metadata_in),
++  .metadata_in_valid         (metadata_in_valid),
 +
 +  .metadata_out              (election_metadata_out),
 +  .metadata_out_valid        (election_metadata_out_valid),
