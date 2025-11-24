@@ -32,3 +32,4 @@ packet = axi_packets.make_replication_packet(dst_mac=dst_mac, src_mac=src_mac, d
 axi_packets.send_packets("cmac0", packet)
 axi_packets.make_cycles_delay("cmac0", 1000)
 
+axi_packets.interface_manager.close_interfaces()
